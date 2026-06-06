@@ -118,6 +118,19 @@ def test_login_page_does_not_show_database_path():
     assert "MVP" not in visible_text
 
 
+def test_customer_crm_does_not_show_import_or_export_controls():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=10)
+    at.text_input[0].set_value("admin@buildway.demo")
+    at.text_input[1].set_value("Admin123!")
+    at.button[0].click()
+    at.run(timeout=10)
+
+    labels = [button.label for button in at.button] + [expander.label for expander in at.expander]
+    assert "匯出客戶 CSV" not in labels
+    assert "匯入客戶 CSV" not in labels
+
+
 def test_normalize_customer_import_dataframe_supports_english_headers():
     normalized = normalize_customer_import_dataframe(
         pd.DataFrame([{"name": "Ada", "phone": "", "stage": "Proposal", "next_meeting_date": "", "notes": "Demo"}])
@@ -136,11 +149,11 @@ def test_upload_data_page_ui_does_not_crash_after_login():
     at.button[0].click()
     at.run(timeout=10)
 
-    at.radio[0].set_value("上載資料")
+    at.radio[0].set_value("上載/下載資料")
     at.run(timeout=10)
 
-    assert at.subheader[0].value == "上載資料"
-    assert at.file_uploader[0].label == "上載圖片或文件"
+    assert at.subheader[0].value == "上載/下載資料"
+    assert any(uploader.label == "上載圖片或文件" for uploader in at.file_uploader)
     assert any(selectbox.label == "資料類型" for selectbox in at.selectbox)
 
 

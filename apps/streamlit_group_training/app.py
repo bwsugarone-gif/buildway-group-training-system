@@ -84,6 +84,15 @@ def yes_no(locale: str, value: bool) -> str:
     return t(locale, "common.yes" if value else "common.no")
 
 
+def agent_display_name(repo: SQLiteGroupTrainingRepository, agent_id: str) -> str:
+    user = repo.get_user(TENANT_ID, agent_id)
+    if not user:
+        return agent_id
+    if user.name and user.email:
+        return f"{user.name} ({user.email})"
+    return user.name or user.email or agent_id
+
+
 def parse_iso_date_or_today(value: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -453,14 +462,14 @@ def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart
     )
 
 
-def customers_to_dataframe(customers, locale: str) -> pd.DataFrame:
+def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepository | None = None) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
                 "id": c.id,
                 "customer": c.name,
                 "stage": translated_stage(locale, c.stage.value),
-                "agent_id": c.agent_id,
+                "agent_id": agent_display_name(repo, c.agent_id) if repo else c.agent_id,
                 "phone": c.phone,
                 "next_meeting_date": c.next_meeting_date.isoformat() if c.next_meeting_date else "",
                 "today_meeting": yes_no(locale, c.next_meeting_date == date.today()),
@@ -483,7 +492,7 @@ def customers_to_dataframe(customers, locale: str) -> pd.DataFrame:
     )
 
 
-def today_schedule_to_dataframe(customers, locale: str) -> pd.DataFrame:
+def today_schedule_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepository | None = None) -> pd.DataFrame:
     sorted_customers = sorted(customers, key=lambda customer: schedule_sort_rank(customer.stage))
     return pd.DataFrame(
         [
@@ -491,7 +500,7 @@ def today_schedule_to_dataframe(customers, locale: str) -> pd.DataFrame:
                 "customer": customer.name,
                 "phone": customer.phone,
                 "stage": translated_stage(locale, customer.stage.value),
-                "agent_id": customer.agent_id,
+                "agent_id": agent_display_name(repo, customer.agent_id) if repo else customer.agent_id,
                 "notes": customer.notes,
                 "today_meeting": yes_no(locale, customer.next_meeting_date == date.today()),
                 "priority": t(locale, schedule_priority_key(customer.stage)),
@@ -566,7 +575,7 @@ def visible_followups_to_dataframe(repo: SQLiteGroupTrainingRepository, user, lo
         [
             {
                 "customer": customer_map[followup.customer_id].name,
-                "agent_id": followup.agent_id,
+                "agent_id": agent_display_name(repo, followup.agent_id),
                 "note": followup.note,
                 "next_action": followup.next_action,
                 "created_at": followup.created_at.strftime("%Y-%m-%d %H:%M"),
@@ -670,7 +679,7 @@ def customer_page(user, locale: str) -> None:
 
     visible_agent_id = user.id if user.role == UserRole.AGENT else None
     customers = service.repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
-    search_col, stage_col, export_col = st.columns([2, 1, 1])
+    search_col, stage_col = st.columns([2, 1])
     search_text = search_col.text_input(
         t(locale, "customer.search"),
         placeholder=t(locale, "customer.search_placeholder"),
@@ -680,67 +689,9 @@ def customer_page(user, locale: str) -> None:
     selected_stage_label = stage_col.selectbox(t(locale, "customer.stage_filter"), list(stage_options.keys()))
     stage_filter = stage_options[selected_stage_label]
     filtered_customers = filter_customers(customers, search_text, stage_filter)
-    customers_df = customers_to_dataframe(filtered_customers, locale)
-    export_col.write("")
-    export_col.write("")
-    render_csv_download(
-        t(locale, "customer.export_csv"),
-        customers_df,
-        "buildway_customers.csv",
-        "customers_csv",
-        locale,
-    )
-    with st.expander(t(locale, "customer.import_csv")):
-        import_agents = visible_agents(repo, user)
-        target_agent_id = user.id
-        if user.role != UserRole.AGENT and import_agents:
-            agent_options = {f"{agent.name} ({agent.email})": agent.id for agent in import_agents}
-            selected_agent_label = st.selectbox(t(locale, "customer.import_agent"), list(agent_options.keys()))
-            target_agent_id = agent_options[selected_agent_label]
-        uploaded_csv = st.file_uploader(t(locale, "customer.upload_csv"), type=["csv"], key="customer_csv_import")
-        if uploaded_csv:
-            try:
-                csv_dataframe = pd.read_csv(uploaded_csv)
-                preview_dataframe = normalize_customer_import_dataframe(csv_dataframe)
-                st.session_state["customer_csv_import_preview"] = preview_dataframe
-                st.session_state["customer_csv_import_agent_id"] = target_agent_id
-                st.markdown(t(locale, "customer.import_preview"))
-                st.dataframe(
-                    localize_columns(
-                        preview_dataframe.assign(next_meeting_date=preview_dataframe["next_meeting_date"].astype(str)),
-                        locale,
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                if preview_dataframe.empty:
-                    st.warning(t(locale, "customer.import_no_valid_rows"))
-            except Exception as exc:
-                st.error(t(locale, "customer.import_failed", error=str(exc)))
-        preview_dataframe = st.session_state.get("customer_csv_import_preview")
-        if preview_dataframe is not None:
-            confirm_col, cancel_col = st.columns(2)
-            if confirm_col.button(t(locale, "customer.confirm_import"), disabled=preview_dataframe.empty):
-                imported_count = import_customers_from_dataframe(
-                    repo,
-                    user,
-                    preview_dataframe,
-                    st.session_state.get("customer_csv_import_agent_id"),
-                )
-                st.session_state.pop("customer_csv_import_preview", None)
-                st.session_state.pop("customer_csv_import_agent_id", None)
-                st.success(t(locale, "customer.import_success", count=imported_count))
-                st.rerun()
-            if cancel_col.button(t(locale, "customer.cancel_import")):
-                st.session_state.pop("customer_csv_import_preview", None)
-                st.session_state.pop("customer_csv_import_agent_id", None)
-                st.rerun()
+    customers_df = customers_to_dataframe(filtered_customers, locale, repo)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
-    st.dataframe(
-        localize_columns(customers_df.drop(columns=["id", "created_at"]), locale),
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.table(localize_columns(customers_df.drop(columns=["id", "created_at"]), locale))
 
     with st.form("customer_form"):
         st.markdown(t(locale, "customer.add"))
@@ -784,7 +735,7 @@ def customer_page(user, locale: str) -> None:
             service.add_followup(TENANT_ID, selected_customer.id, user.id, note, next_action)
             st.success(t(locale, "customer.followup_saved"))
             st.rerun()
-        st.dataframe(
+        st.table(
             localize_columns(
                 pd.DataFrame(
                     [
@@ -800,19 +751,13 @@ def customer_page(user, locale: str) -> None:
                 ),
                 locale,
             ),
-            use_container_width=True,
-            hide_index=True,
         )
     recent_followups_df = visible_followups_to_dataframe(repo, user, locale)
     st.subheader(t(locale, "customer.recent_followups"))
     if recent_followups_df.empty:
         st.info(t(locale, "customer.no_recent_followups"))
     else:
-        st.dataframe(
-            localize_columns(recent_followups_df, locale),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.table(localize_columns(recent_followups_df, locale))
 
 
 def daily_log_page(user, locale: str) -> None:
@@ -855,12 +800,57 @@ def daily_log_page(user, locale: str) -> None:
 
     logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     logs_df = daily_logs_to_dataframe(logs)
-    render_csv_download(t(locale, "daily.export_csv"), logs_df, "buildway_daily_logs.csv", "daily_logs_csv", locale)
     st.dataframe(
         localize_columns(logs_df.drop(columns=["id", "created_at"]), locale),
         use_container_width=True,
         hide_index=True,
     )
+
+
+def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale: str) -> None:
+    st.subheader(t(locale, "customer.import_csv"))
+    import_agents = visible_agents(repo, user)
+    target_agent_id = user.id
+    if user.role != UserRole.AGENT and import_agents:
+        agent_options = {f"{agent.name} ({agent.email})": agent.id for agent in import_agents}
+        selected_agent_label = st.selectbox(t(locale, "customer.import_agent"), list(agent_options.keys()))
+        target_agent_id = agent_options[selected_agent_label]
+    uploaded_csv = st.file_uploader(t(locale, "customer.upload_csv"), type=["csv"], key="customer_csv_import")
+    if uploaded_csv:
+        try:
+            csv_dataframe = pd.read_csv(uploaded_csv)
+            preview_dataframe = normalize_customer_import_dataframe(csv_dataframe)
+            st.session_state["customer_csv_import_preview"] = preview_dataframe
+            st.session_state["customer_csv_import_agent_id"] = target_agent_id
+            st.markdown(t(locale, "customer.import_preview"))
+            st.table(
+                localize_columns(
+                    preview_dataframe.assign(next_meeting_date=preview_dataframe["next_meeting_date"].astype(str)),
+                    locale,
+                )
+            )
+            if preview_dataframe.empty:
+                st.warning(t(locale, "customer.import_no_valid_rows"))
+        except Exception as exc:
+            st.error(t(locale, "customer.import_failed", error=str(exc)))
+    preview_dataframe = st.session_state.get("customer_csv_import_preview")
+    if preview_dataframe is not None:
+        confirm_col, cancel_col = st.columns(2)
+        if confirm_col.button(t(locale, "customer.confirm_import"), disabled=preview_dataframe.empty):
+            imported_count = import_customers_from_dataframe(
+                repo,
+                user,
+                preview_dataframe,
+                st.session_state.get("customer_csv_import_agent_id"),
+            )
+            st.session_state.pop("customer_csv_import_preview", None)
+            st.session_state.pop("customer_csv_import_agent_id", None)
+            st.success(t(locale, "customer.import_success", count=imported_count))
+            st.rerun()
+        if cancel_col.button(t(locale, "customer.cancel_import")):
+            st.session_state.pop("customer_csv_import_preview", None)
+            st.session_state.pop("customer_csv_import_agent_id", None)
+            st.rerun()
 
 
 def ocr_data_type_options(locale: str) -> dict[str, str]:
@@ -1013,10 +1003,26 @@ def render_ocr_follow_up_form(user, locale: str, structured: dict) -> None:
 
 
 def ocr_capture_page(user, locale: str) -> None:
+    repo = get_repo()
     st.subheader(t(locale, "ocr.title"))
     st.caption(t(locale, "ocr.description"))
     if st.session_state.pop("ocr_flash_success", False):
         st.success(t(locale, "ocr.save_success"))
+
+    st.markdown(t(locale, "data.download_section"))
+    visible_agent_id = user.id if user.role == UserRole.AGENT else None
+    customers_df = customers_to_dataframe(repo.list_customers(TENANT_ID, agent_id=visible_agent_id), locale, repo)
+    logs_df = daily_logs_to_dataframe(repo.list_logs(TENANT_ID, agent_id=visible_agent_id))
+    export_customer_col, export_daily_col = st.columns(2)
+    with export_customer_col:
+        render_csv_download(t(locale, "customer.export_csv"), customers_df, "buildway_customers.csv", "customers_csv_upload_page", locale)
+    with export_daily_col:
+        render_csv_download(t(locale, "daily.export_csv"), logs_df, "buildway_daily_logs.csv", "daily_logs_csv_upload_page", locale)
+
+    with st.expander(t(locale, "customer.import_csv")):
+        render_customer_csv_import(repo, user, locale)
+
+    st.markdown(t(locale, "data.upload_section"))
     uploaded_file = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx"])
     data_type_options = ocr_data_type_options(locale)
     selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()))
@@ -1087,24 +1093,17 @@ def today_schedule_page(user, locale: str) -> None:
         for customer in repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
         if customer.next_meeting_date == date.today()
     ]
-    schedule_df = today_schedule_to_dataframe(customers, locale)
+    schedule_df = today_schedule_to_dataframe(customers, locale, repo)
+    st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
-    st.dataframe(
-        localize_columns(schedule_df, locale),
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.table(localize_columns(schedule_df, locale))
     st.info(t(locale, schedule_recommendation_key(customers)))
     pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
     st.subheader(t(locale, "schedule.pending_followups"))
     if pending_followups_df.empty:
         st.info(t(locale, "schedule.no_pending_followups"))
     else:
-        st.dataframe(
-            localize_columns(pending_followups_df, locale),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.table(localize_columns(pending_followups_df, locale))
 
 
 def ai_training_page(user, locale: str) -> None:

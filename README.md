@@ -112,6 +112,12 @@ streamlit run apps/streamlit_group_training/app.py
 
 ---
 
+## Streamlit Cloud Demo Note
+
+The Streamlit Cloud demo is suitable for Phase 1 client acceptance and workflow walkthroughs. Streamlit Cloud may still show platform-level chrome such as Share, GitHub, or the app menu. For a formal commercial deployment, use private hosting such as a VPS, Render, or another controlled hosting environment where the product shell, domain, authentication, and headers can be fully managed.
+
+---
+
 ## Rules
 
 1. `core/` must not contain industry-specific logic
