@@ -24,6 +24,12 @@ from apps.streamlit_group_training.services.ocr_service import (
     convert_ocr_text_to_structured_data,
     extract_text_from_image,
 )
+from apps.streamlit_group_training.services.demo_dataset_service import (
+    demo_dataset_allowed,
+    generate_demo_ai_insights,
+    generate_demo_dashboard_metrics,
+    seed_demo_dataset,
+)
 from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score
 from verticals.group_training.agents.training_agent import review_daily_performance
 from verticals.group_training.models import CustomerStage, UserRole
@@ -42,7 +48,7 @@ from verticals.group_training.services.sqlite_repository import (
 
 
 TENANT_ID = DEFAULT_TENANT_ID
-RAW_I18N_PREFIXES = ("nav.", "schedule.", "training.", "dashboard.", "risk.", "scoring_basis.", "scoring.", "ocr.")
+RAW_I18N_PREFIXES = ("nav.", "schedule.", "training.", "dashboard.", "risk.", "scoring_basis.", "scoring.", "ocr.", "demo.")
 
 
 def t(locale: str, key: str, **kwargs) -> str:
@@ -635,6 +641,67 @@ def render_csv_download(label: str, dataframe: pd.DataFrame, file_name: str, key
     )
 
 
+def render_demo_dataset_controls(repo: SQLiteGroupTrainingRepository, user, locale: str) -> bool:
+    if user.role == UserRole.AGENT:
+        return False
+    with st.expander(t(locale, "demo.dataset_title")):
+        st.caption(t(locale, "demo.dataset_description"))
+        if not demo_dataset_allowed(TENANT_ID):
+            st.warning(t(locale, "demo.not_allowed"))
+            return False
+        confirmed = st.checkbox(t(locale, "demo.confirm_reset"), key="demo_dataset_confirm")
+        load_col, reset_col = st.columns(2)
+        load_clicked = load_col.button(t(locale, "demo.load_dataset"), disabled=not confirmed)
+        reset_clicked = reset_col.button(t(locale, "demo.reset_dataset"), disabled=not confirmed)
+        if load_clicked or reset_clicked:
+            counts = seed_demo_dataset(repo, TENANT_ID, DEFAULT_TEAM_ID, "mgr_001")
+            st.success(
+                t(
+                    locale,
+                    "demo.seed_success",
+                    agents=counts["agents"],
+                    customers=counts["customers"],
+                    logs=counts["daily_logs"],
+                )
+            )
+            st.rerun()
+    return False
+
+
+def dashboard_metric_rows(metrics: dict) -> list[tuple[str, str]]:
+    return [
+        ("dashboard.team_total_customers", str(metrics["team_total_customers"])),
+        ("dashboard.today_activity_count", str(metrics["today_activity_count"])),
+        ("dashboard.weekly_followup_count", str(metrics["weekly_followup_count"])),
+        ("dashboard.overdue_followup_count", str(metrics["overdue_followup_count"])),
+        ("dashboard.high_potential_customer_count", str(metrics["high_potential_customer_count"])),
+        ("dashboard.low_active_agent_count", str(metrics["low_active_agent_count"])),
+        ("dashboard.hidden_score_summary", f"{metrics['hidden_score_average']:.1f}"),
+        ("dashboard.risk_agents", str(len(metrics["risk_agent_ids"]))),
+    ]
+
+
+def top_agents_to_dataframe(repo: SQLiteGroupTrainingRepository, rows: list[dict]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "agent_id": agent_display_name(repo, row["agent_id"]),
+                "activity_score": row["activity_score"],
+                "hidden_score": row["hidden_score"],
+            }
+            for row in rows
+        ],
+        columns=["agent_id", "activity_score", "hidden_score"],
+    )
+
+
+def risk_agents_to_dataframe(repo: SQLiteGroupTrainingRepository, agent_ids: list[str], locale: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"agent_id": agent_display_name(repo, agent_id), "risk_hint": t(locale, "risk.High")} for agent_id in agent_ids],
+        columns=["agent_id", "risk_hint"],
+    )
+
+
 @st.cache_resource
 def get_repo() -> SQLiteGroupTrainingRepository:
     return SQLiteGroupTrainingRepository(os.environ.get("BUILDWAY_GROUP_TRAINING_DB"))
@@ -1139,10 +1206,54 @@ def today_schedule_page(user, locale: str) -> None:
         render_simple_table(pending_followups_df, locale)
 
 
+def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: str) -> None:
+    agents = visible_agents(repo, user)
+    visible_agent_id = user.id if user.role == UserRole.AGENT else None
+    customers = repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
+    logs = repo.list_logs(TENANT_ID, agent_id=visible_agent_id)
+    reviews = repo.list_reviews(TENANT_ID, agent_id=visible_agent_id)
+    scores = repo.list_closing_scores(TENANT_ID, agent_id=visible_agent_id)
+    insights = generate_demo_ai_insights(user, agents, customers, logs, reviews, scores)
+    st.subheader(t(locale, "training.demo_insights"))
+    if insights["today_outreach"] or insights["today_meetings"]:
+        st.info(
+            t(
+                locale,
+                "training.today_recommendation",
+                outreach=insights["today_outreach"],
+                meetings=insights["today_meetings"],
+            )
+        )
+    else:
+        st.info(t(locale, "training.today_recommendation_empty"))
+
+    insight_col_1, insight_col_2 = st.columns(2)
+    high_potential_df = customers_to_dataframe(insights["high_potential_customers"], locale, repo)
+    insight_col_1.markdown(t(locale, "training.high_potential_customers"))
+    render_simple_table(high_potential_df.drop(columns=["id", "created_at"]), locale, insight_col_1)
+
+    followup_df = customers_to_dataframe(insights["followup_customers"], locale, repo)
+    insight_col_2.markdown(t(locale, "training.followup_customers"))
+    render_simple_table(followup_df.drop(columns=["id", "created_at"]), locale, insight_col_2)
+
+    if user.role == UserRole.AGENT:
+        st.caption(t(locale, "training.agent_activity_reminder", risk=translated_risk(locale, insights["latest_risk"])))
+    else:
+        st.caption(
+            t(
+                locale,
+                "training.manager_team_recommendation",
+                low_active=insights["low_active_agent_count"],
+                risk_agents=len(insights["risk_agent_ids"]),
+            )
+        )
+
+
 def ai_training_page(user, locale: str) -> None:
     repo = get_repo()
     st.subheader(t(locale, "training.title"))
     render_scoring_basis(locale)
+    render_demo_ai_insights(repo, user, locale)
     reviews = repo.list_reviews(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     log_index = logs_by_agent_and_date(logs)
@@ -1183,15 +1294,27 @@ def manager_dashboard_page(user, locale: str) -> None:
         st.warning(t(locale, "dashboard.agent_blocked"))
         return
     repo = get_repo()
+    render_demo_dataset_controls(repo, user, locale)
     manager_id = user.id if user.role == UserRole.MANAGER else "mgr_001"
     dashboard = DashboardService(repo).manager_dashboard(TENANT_ID, manager_id, user.role)
+    team_ids = {agent.team_id for agent in dashboard["agents"] if agent.team_id}
+    customers = [customer for team_id in team_ids for customer in repo.list_customers(TENANT_ID, team_id=team_id)]
+    metrics = generate_demo_dashboard_metrics(
+        dashboard["agents"],
+        customers,
+        dashboard["daily_logs"],
+        dashboard["reviews"],
+        dashboard["closing_scores"],
+    )
     st.subheader(t(locale, "dashboard.title"))
     render_scoring_basis(locale)
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(t(locale, "dashboard.team_agents"), len(dashboard["agents"]))
-    c2.metric(t(locale, "dashboard.daily_logs"), len(dashboard["daily_logs"]))
-    c3.metric(t(locale, "dashboard.ai_reviews"), len(dashboard["reviews"]))
-    c4.metric(t(locale, "dashboard.high_risk_members"), len(dashboard["high_risk_agent_ids"]))
+    metric_rows = dashboard_metric_rows(metrics)
+    for column, (label_key, value) in zip([c1, c2, c3, c4], metric_rows[:4]):
+        column.metric(t(locale, label_key), value)
+    c5, c6, c7, c8 = st.columns(4)
+    for column, (label_key, value) in zip([c5, c6, c7, c8], metric_rows[4:]):
+        column.metric(t(locale, label_key), value)
 
     chart_col_1, chart_col_2 = st.columns(2)
     logs_df = daily_logs_to_dataframe(dashboard["daily_logs"])
@@ -1201,8 +1324,6 @@ def manager_dashboard_page(user, locale: str) -> None:
     else:
         chart_col_1.info(t(locale, "dashboard.no_daily_log_data"))
 
-    team_ids = {agent.team_id for agent in dashboard["agents"] if agent.team_id}
-    customers = [customer for team_id in team_ids for customer in repo.list_customers(TENANT_ID, team_id=team_id)]
     if customers:
         chart_col_2.markdown(t(locale, "dashboard.customers_by_stage"))
         chart_col_2.altair_chart(stage_chart(customers, locale), use_container_width=True)
@@ -1219,6 +1340,11 @@ def manager_dashboard_page(user, locale: str) -> None:
         locale,
         team_col,
     )
+    team_col.markdown(t(locale, "dashboard.top_agents"))
+    render_simple_table(top_agents_to_dataframe(repo, metrics["top_agents"]), locale, team_col)
+    team_col.markdown(t(locale, "dashboard.risk_agents"))
+    render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
+
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
         [

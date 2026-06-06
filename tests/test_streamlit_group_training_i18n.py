@@ -19,6 +19,7 @@ RAW_KEY_PREFIXES = (
     "hidden_score.",
     "column.",
     "data.",
+    "demo.",
 )
 
 
