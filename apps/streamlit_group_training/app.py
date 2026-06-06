@@ -251,6 +251,43 @@ def localize_columns(dataframe: pd.DataFrame, locale: str) -> pd.DataFrame:
     return dataframe.rename(columns={column: t(locale, f"column.{column}") for column in dataframe.columns})
 
 
+def render_simple_table(dataframe: pd.DataFrame, locale: str, container=st) -> None:
+    localized = localize_columns(dataframe, locale)
+    if localized.empty:
+        container.table(localized)
+        return
+    html = localized.to_html(index=False, escape=True, classes="simple-demo-table")
+    container.markdown(
+        f"""
+        <div style="overflow-x:auto; width:100%;">
+            <style>
+            .simple-demo-table {{
+                border-collapse: collapse;
+                width: 100%;
+                min-width: 640px;
+                font-size: 0.92rem;
+            }}
+            .simple-demo-table th,
+            .simple-demo-table td {{
+                border: 1px solid #e5e7eb;
+                padding: 0.5rem 0.65rem;
+                text-align: left;
+                vertical-align: top;
+                white-space: normal;
+                word-break: break-word;
+            }}
+            .simple-demo-table th {{
+                background: #f8fafc;
+                font-weight: 600;
+            }}
+            </style>
+            {html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def scoring_basis_items(locale: str) -> list[str]:
     return [t(locale, f"scoring_basis.item_{index}") for index in range(1, 7)]
 
@@ -691,7 +728,7 @@ def customer_page(user, locale: str) -> None:
     filtered_customers = filter_customers(customers, search_text, stage_filter)
     customers_df = customers_to_dataframe(filtered_customers, locale, repo)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
-    st.table(localize_columns(customers_df.drop(columns=["id", "created_at"]), locale))
+    render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
 
     with st.form("customer_form"):
         st.markdown(t(locale, "customer.add"))
@@ -735,29 +772,27 @@ def customer_page(user, locale: str) -> None:
             service.add_followup(TENANT_ID, selected_customer.id, user.id, note, next_action)
             st.success(t(locale, "customer.followup_saved"))
             st.rerun()
-        st.table(
-            localize_columns(
-                pd.DataFrame(
-                    [
-                        {
-                            "created_at": f.created_at.strftime("%Y-%m-%d %H:%M"),
-                            "agent_id": f.agent_id,
-                            "note": f.note,
-                            "next_action": f.next_action,
-                        }
-                        for f in service.customer_history(TENANT_ID, selected_customer.id)
-                    ],
-                    columns=["created_at", "agent_id", "note", "next_action"],
-                ),
-                locale,
+        render_simple_table(
+            pd.DataFrame(
+                [
+                    {
+                        "created_at": f.created_at.strftime("%Y-%m-%d %H:%M"),
+                        "agent_id": agent_display_name(repo, f.agent_id),
+                        "note": f.note,
+                        "next_action": f.next_action,
+                    }
+                    for f in service.customer_history(TENANT_ID, selected_customer.id)
+                ],
+                columns=["created_at", "agent_id", "note", "next_action"],
             ),
+            locale,
         )
     recent_followups_df = visible_followups_to_dataframe(repo, user, locale)
     st.subheader(t(locale, "customer.recent_followups"))
     if recent_followups_df.empty:
         st.info(t(locale, "customer.no_recent_followups"))
     else:
-        st.table(localize_columns(recent_followups_df, locale))
+        render_simple_table(recent_followups_df, locale)
 
 
 def daily_log_page(user, locale: str) -> None:
@@ -800,11 +835,7 @@ def daily_log_page(user, locale: str) -> None:
 
     logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     logs_df = daily_logs_to_dataframe(logs)
-    st.dataframe(
-        localize_columns(logs_df.drop(columns=["id", "created_at"]), locale),
-        use_container_width=True,
-        hide_index=True,
-    )
+    render_simple_table(logs_df.drop(columns=["id", "created_at"]), locale)
 
 
 def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale: str) -> None:
@@ -823,11 +854,9 @@ def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale
             st.session_state["customer_csv_import_preview"] = preview_dataframe
             st.session_state["customer_csv_import_agent_id"] = target_agent_id
             st.markdown(t(locale, "customer.import_preview"))
-            st.table(
-                localize_columns(
-                    preview_dataframe.assign(next_meeting_date=preview_dataframe["next_meeting_date"].astype(str)),
-                    locale,
-                )
+            render_simple_table(
+                preview_dataframe.assign(next_meeting_date=preview_dataframe["next_meeting_date"].astype(str)),
+                locale,
             )
             if preview_dataframe.empty:
                 st.warning(t(locale, "customer.import_no_valid_rows"))
@@ -1009,7 +1038,13 @@ def ocr_capture_page(user, locale: str) -> None:
     if st.session_state.pop("ocr_flash_success", False):
         st.success(t(locale, "ocr.save_success"))
 
-    st.markdown(t(locale, "data.download_section"))
+    st.subheader(t(locale, "data.import_section"))
+    st.caption(t(locale, "data.import_description"))
+    with st.expander(t(locale, "customer.import_csv")):
+        render_customer_csv_import(repo, user, locale)
+
+    st.subheader(t(locale, "data.export_section"))
+    st.caption(t(locale, "data.export_description"))
     visible_agent_id = user.id if user.role == UserRole.AGENT else None
     customers_df = customers_to_dataframe(repo.list_customers(TENANT_ID, agent_id=visible_agent_id), locale, repo)
     logs_df = daily_logs_to_dataframe(repo.list_logs(TENANT_ID, agent_id=visible_agent_id))
@@ -1019,10 +1054,8 @@ def ocr_capture_page(user, locale: str) -> None:
     with export_daily_col:
         render_csv_download(t(locale, "daily.export_csv"), logs_df, "buildway_daily_logs.csv", "daily_logs_csv_upload_page", locale)
 
-    with st.expander(t(locale, "customer.import_csv")):
-        render_customer_csv_import(repo, user, locale)
-
-    st.markdown(t(locale, "data.upload_section"))
+    st.subheader(t(locale, "data.document_section"))
+    st.caption(t(locale, "data.document_description"))
     uploaded_file = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx"])
     data_type_options = ocr_data_type_options(locale)
     selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()))
@@ -1031,7 +1064,7 @@ def ocr_capture_page(user, locale: str) -> None:
     file_bytes = b""
     if uploaded_file:
         file_bytes = uploaded_file.getvalue()
-        st.info(t(locale, "ocr.demo_file_received"))
+        st.info(t(locale, "data.demo_mode"))
         file_info_df = pd.DataFrame(
             [
                 {
@@ -1041,7 +1074,7 @@ def ocr_capture_page(user, locale: str) -> None:
                 }
             ]
         )
-        st.dataframe(localize_columns(file_info_df, locale), use_container_width=True, hide_index=True)
+        render_simple_table(file_info_df, locale)
         suffix = Path(uploaded_file.name).suffix.lower()
         if suffix in {".png", ".jpg", ".jpeg"}:
             st.markdown(t(locale, "ocr.preview"))
@@ -1096,14 +1129,14 @@ def today_schedule_page(user, locale: str) -> None:
     schedule_df = today_schedule_to_dataframe(customers, locale, repo)
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
-    st.table(localize_columns(schedule_df, locale))
+    render_simple_table(schedule_df, locale)
     st.info(t(locale, schedule_recommendation_key(customers)))
     pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
     st.subheader(t(locale, "schedule.pending_followups"))
     if pending_followups_df.empty:
         st.info(t(locale, "schedule.no_pending_followups"))
     else:
-        st.table(localize_columns(pending_followups_df, locale))
+        render_simple_table(pending_followups_df, locale)
 
 
 def ai_training_page(user, locale: str) -> None:
@@ -1113,37 +1146,33 @@ def ai_training_page(user, locale: str) -> None:
     reviews = repo.list_reviews(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     log_index = logs_by_agent_and_date(logs)
-    st.dataframe(
-        localize_columns(
-            pd.DataFrame(
-                [
-                    {
-                        "date": r.review_date,
-                        "agent_id": r.agent_id,
-                        "summary": localized_review_summary(
-                            locale,
-                            log_index.get((r.agent_id, r.review_date)),
-                            r.summary,
-                        ),
-                        "advice": localized_review_advice(
-                            locale,
-                            log_index.get((r.agent_id, r.review_date)),
-                            r.risk_level,
-                            r.improvement_advice,
-                        ),
-                        "manager_feedback": ""
-                        if user.role == UserRole.AGENT
-                        else t(locale, "training.manager_feedback"),
-                        "risk": translated_risk(locale, r.risk_level),
-                    }
-                    for r in reviews
-                ],
-                columns=["date", "agent_id", "summary", "advice", "manager_feedback", "risk"],
-            ),
-            locale,
+    render_simple_table(
+        pd.DataFrame(
+            [
+                {
+                    "date": r.review_date,
+                    "agent_id": agent_display_name(repo, r.agent_id),
+                    "summary": localized_review_summary(
+                        locale,
+                        log_index.get((r.agent_id, r.review_date)),
+                        r.summary,
+                    ),
+                    "advice": localized_review_advice(
+                        locale,
+                        log_index.get((r.agent_id, r.review_date)),
+                        r.risk_level,
+                        r.improvement_advice,
+                    ),
+                    "manager_feedback": ""
+                    if user.role == UserRole.AGENT
+                    else t(locale, "training.manager_feedback"),
+                    "risk": translated_risk(locale, r.risk_level),
+                }
+                for r in reviews
+            ],
+            columns=["date", "agent_id", "summary", "advice", "manager_feedback", "risk"],
         ),
-        use_container_width=True,
-        hide_index=True,
+        locale,
     )
     if user.role == UserRole.AGENT:
         st.info(t(locale, "training.hidden_score_agent_info"))
@@ -1182,23 +1211,20 @@ def manager_dashboard_page(user, locale: str) -> None:
 
     team_col, score_col = st.columns(2)
     team_col.markdown(t(locale, "dashboard.team_downline"))
-    team_col.dataframe(
-        localize_columns(
-            pd.DataFrame(
-                [{"agent_id": a.id, "name": a.name, "email": a.email, "team_id": a.team_id} for a in dashboard["agents"]],
-                columns=["agent_id", "name", "email", "team_id"],
-            ),
-            locale,
+    render_simple_table(
+        pd.DataFrame(
+            [{"agent_id": agent_display_name(repo, a.id), "name": a.name, "email": a.email, "team_id": a.team_id} for a in dashboard["agents"]],
+            columns=["agent_id", "name", "email", "team_id"],
         ),
-        use_container_width=True,
-        hide_index=True,
+        locale,
+        team_col,
     )
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
         [
             {
                 "date": s.score_date.isoformat(),
-                "agent_id": s.agent_id,
+                "agent_id": agent_display_name(repo, s.agent_id),
                 "hidden_score": s.hidden_score,
                 "rationale": t(locale, "hidden_score.rationale"),
             }
@@ -1211,16 +1237,8 @@ def manager_dashboard_page(user, locale: str) -> None:
         average_score = score_summary_df["average_hidden_score"].mean()
         score_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
         score_col.altair_chart(hidden_score_chart(score_summary_df, locale), use_container_width=True)
-        score_col.dataframe(
-            localize_columns(score_summary_df, locale),
-            use_container_width=True,
-            hide_index=True,
-        )
-    score_col.dataframe(
-        localize_columns(scores_df, locale),
-        use_container_width=True,
-        hide_index=True,
-    )
+        render_simple_table(score_summary_df, locale, score_col)
+    render_simple_table(scores_df, locale, score_col)
 
 
 def main() -> None:

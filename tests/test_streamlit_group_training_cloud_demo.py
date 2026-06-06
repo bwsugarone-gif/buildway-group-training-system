@@ -1,5 +1,6 @@
 from datetime import date
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -12,8 +13,10 @@ from apps.streamlit_group_training.app import (
     signup_user,
     visible_followups_to_dataframe,
 )
+from apps.streamlit_group_training.i18n.loader import translate
 from verticals.group_training.models import Customer, CustomerStage, User, UserRole
 from verticals.group_training.services.auth_service import verify_password
+from verticals.group_training.services.customer_service import CustomerService
 from verticals.group_training.services.sqlite_repository import (
     DEFAULT_TEAM_ID,
     SQLiteGroupTrainingRepository,
@@ -111,8 +114,7 @@ def test_login_page_does_not_show_database_path():
     at.run(timeout=10)
     visible_text = "\n".join(str(element.value) for element in [*at.caption, *at.markdown, *at.subheader])
 
-    assert "SQLite 資料庫" not in visible_text
-    assert "SQLite database" not in visible_text
+    assert "SQLite" not in visible_text
     assert "group_training.sqlite3" not in visible_text
     assert "Phase" not in visible_text
     assert "MVP" not in visible_text
@@ -127,8 +129,15 @@ def test_customer_crm_does_not_show_import_or_export_controls():
     at.run(timeout=10)
 
     labels = [button.label for button in at.button] + [expander.label for expander in at.expander]
-    assert "匯出客戶 CSV" not in labels
-    assert "匯入客戶 CSV" not in labels
+    assert translate("zh_HK", "customer.export_csv") not in labels
+    assert translate("zh_HK", "customer.import_csv") not in labels
+
+
+def test_group_training_app_no_long_tables_use_streamlit_dataframe_toolbar():
+    source = Path(APP_PATH).read_text(encoding="utf-8")
+
+    assert "st.dataframe" not in source
+    assert ".dataframe(" not in source
 
 
 def test_normalize_customer_import_dataframe_supports_english_headers():
@@ -141,7 +150,7 @@ def test_normalize_customer_import_dataframe_supports_english_headers():
     assert normalized.iloc[0]["next_meeting_date"] == date.today()
 
 
-def test_upload_data_page_ui_does_not_crash_after_login():
+def test_upload_download_data_page_has_three_sections_and_upload_controls():
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=10)
     at.text_input[0].set_value("admin@buildway.demo")
@@ -149,20 +158,25 @@ def test_upload_data_page_ui_does_not_crash_after_login():
     at.button[0].click()
     at.run(timeout=10)
 
-    at.radio[0].set_value("上載/下載資料")
+    at.radio[0].set_value(translate("zh_HK", "nav.ocr_data_capture"))
     at.run(timeout=10)
 
-    assert at.subheader[0].value == "上載/下載資料"
-    assert any(uploader.label == "上載圖片或文件" for uploader in at.file_uploader)
-    assert any(selectbox.label == "資料類型" for selectbox in at.selectbox)
+    subheaders = [element.value for element in at.subheader]
+    captions = [element.value for element in at.caption]
+    assert translate("zh_HK", "ocr.title") in subheaders
+    assert translate("zh_HK", "data.import_section") in subheaders
+    assert translate("zh_HK", "data.export_section") in subheaders
+    assert translate("zh_HK", "data.document_section") in subheaders
+    assert translate("zh_HK", "data.import_description") in captions
+    assert translate("zh_HK", "data.export_description") in captions
+    assert translate("zh_HK", "data.document_description") in captions
+    assert any(uploader.label == translate("zh_HK", "ocr.upload_image") for uploader in at.file_uploader)
+    assert any(selectbox.label == translate("zh_HK", "ocr.data_type") for selectbox in at.selectbox)
 
 
 def test_followup_visible_in_recent_records_for_agent_and_manager(tmp_path):
     repo = SQLiteGroupTrainingRepository(tmp_path / "followups.sqlite3")
-    customer_service = __import__(
-        "verticals.group_training.services.customer_service",
-        fromlist=["CustomerService"],
-    ).CustomerService(repo)
+    customer_service = CustomerService(repo)
     agent_customer = customer_service.create_customer(TENANT_ID, DEFAULT_TEAM_ID, "agt_001", "Agent Customer", "Warm")
     other_customer = customer_service.create_customer(TENANT_ID, DEFAULT_TEAM_ID, "agt_002", "Other Customer", "Warm")
     customer_service.add_followup(TENANT_ID, agent_customer.id, "agt_001", "Agent note", "Call tomorrow")

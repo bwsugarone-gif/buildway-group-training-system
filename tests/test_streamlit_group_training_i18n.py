@@ -18,6 +18,7 @@ RAW_KEY_PREFIXES = (
     "chart.",
     "hidden_score.",
     "column.",
+    "data.",
 )
 
 
