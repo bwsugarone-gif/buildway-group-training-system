@@ -644,26 +644,34 @@ def render_csv_download(label: str, dataframe: pd.DataFrame, file_name: str, key
 def render_demo_dataset_controls(repo: SQLiteGroupTrainingRepository, user, locale: str) -> bool:
     if user.role == UserRole.AGENT:
         return False
+    user_key = getattr(user, "id", "guest")
+    flash = st.session_state.pop("demo_dataset_flash", None)
+    if flash:
+        st.success(
+            t(
+                locale,
+                flash["message_key"],
+                agents=flash["counts"]["agents"],
+                customers=flash["counts"]["customers"],
+                logs=flash["counts"]["daily_logs"],
+            )
+        )
     with st.expander(t(locale, "demo.dataset_title")):
         st.caption(t(locale, "demo.dataset_description"))
         if not demo_dataset_allowed(TENANT_ID):
             st.warning(t(locale, "demo.not_allowed"))
             return False
-        confirmed = st.checkbox(t(locale, "demo.confirm_reset"), key="demo_dataset_confirm")
+        confirmed = st.checkbox(t(locale, "demo.confirm_reset"), key=f"dashboard_demo_confirm_{user_key}")
         load_col, reset_col = st.columns(2)
-        load_clicked = load_col.button(t(locale, "demo.load_dataset"), disabled=not confirmed)
-        reset_clicked = reset_col.button(t(locale, "demo.reset_dataset"), disabled=not confirmed)
-        if load_clicked or reset_clicked:
+        load_clicked = load_col.button(t(locale, "demo.load_dataset"), disabled=not confirmed, key=f"dashboard_demo_load_{user_key}")
+        reset_clicked = reset_col.button(t(locale, "demo.reset_dataset"), disabled=not confirmed, key=f"dashboard_demo_reset_{user_key}")
+        if load_clicked:
             counts = seed_demo_dataset(repo, TENANT_ID, DEFAULT_TEAM_ID, "mgr_001")
-            st.success(
-                t(
-                    locale,
-                    "demo.seed_success",
-                    agents=counts["agents"],
-                    customers=counts["customers"],
-                    logs=counts["daily_logs"],
-                )
-            )
+            st.session_state["demo_dataset_flash"] = {"message_key": "demo.seed_success", "counts": counts}
+            st.rerun()
+        if reset_clicked:
+            counts = seed_demo_dataset(repo, TENANT_ID, DEFAULT_TEAM_ID, "mgr_001")
+            st.session_state["demo_dataset_flash"] = {"message_key": "demo.reset_success", "counts": counts}
             st.rerun()
     return False
 
@@ -713,7 +721,7 @@ def login_panel(repo: SQLiteGroupTrainingRepository, locale: str):
         if user:
             with st.sidebar:
                 st.caption(t(locale, "auth.signed_in", email=user.email))
-                if st.button(t(locale, "auth.logout")):
+                if st.button(t(locale, "auth.logout"), key=f"sidebar_logout_{user.id}"):
                     st.session_state.pop("gt_user_id", None)
                     st.rerun()
             return user
@@ -744,7 +752,7 @@ def login_panel(repo: SQLiteGroupTrainingRepository, locale: str):
             signup_email = st.text_input(t(locale, "auth.email"), key="signup_email")
             signup_password = st.text_input(t(locale, "auth.password"), type="password", key="signup_password")
             confirm_password = st.text_input(t(locale, "auth.confirm_password"), type="password")
-            selected_role_label = st.selectbox(t(locale, "auth.signup_role"), list(role_options.keys()))
+            selected_role_label = st.selectbox(t(locale, "auth.signup_role"), list(role_options.keys()), key="signup_role_select")
             signup_submit = st.form_submit_button(t(locale, "auth.signup_submit"))
         if signup_submit:
             ok, message_key = signup_user(
@@ -776,6 +784,15 @@ def visible_agents(repo: SQLiteGroupTrainingRepository, user):
     return repo.list_agents_for_manager(TENANT_ID, manager_id)
 
 
+def report_agents(repo: SQLiteGroupTrainingRepository, user):
+    if user.role == UserRole.AGENT:
+        return [user]
+    direct_agents = visible_agents(repo, user)
+    if direct_agents:
+        return direct_agents
+    return [candidate for candidate in repo.list_users(TENANT_ID) if candidate.role == UserRole.AGENT]
+
+
 def customer_page(user, locale: str) -> None:
     repo = get_repo()
     service = CustomerService(repo)
@@ -790,7 +807,7 @@ def customer_page(user, locale: str) -> None:
     )
     stage_options = {t(locale, "customer.stage_all"): None}
     stage_options.update({translated_stage(locale, stage.value): stage.value for stage in CustomerStage})
-    selected_stage_label = stage_col.selectbox(t(locale, "customer.stage_filter"), list(stage_options.keys()))
+    selected_stage_label = stage_col.selectbox(t(locale, "customer.stage_filter"), list(stage_options.keys()), key=f"customer_stage_filter_{user.id}")
     stage_filter = stage_options[selected_stage_label]
     filtered_customers = filter_customers(customers, search_text, stage_filter)
     customers_df = customers_to_dataframe(filtered_customers, locale, repo)
@@ -802,7 +819,7 @@ def customer_page(user, locale: str) -> None:
         name = st.text_input(t(locale, "customer.name"))
         phone = st.text_input(t(locale, "customer.phone"))
         stage_labels = {translated_stage(locale, stage.value): stage.value for stage in CustomerStage}
-        selected_stage = st.selectbox(t(locale, "customer.stage"), list(stage_labels.keys()))
+        selected_stage = st.selectbox(t(locale, "customer.stage"), list(stage_labels.keys()), key=f"customer_stage_select_{user.id}")
         stage = stage_labels[selected_stage]
         next_meeting = st.date_input(t(locale, "customer.next_meeting_date"), value=date.today())
         notes = st.text_area(t(locale, "customer.notes"))
@@ -810,7 +827,7 @@ def customer_page(user, locale: str) -> None:
         agent_options = {f"{agent.name} ({agent.email})": agent for agent in agents}
         selected_agent_label = None
         if user.role != UserRole.AGENT and agent_options:
-            selected_agent_label = st.selectbox(t(locale, "customer.agent"), list(agent_options.keys()))
+            selected_agent_label = st.selectbox(t(locale, "customer.agent"), list(agent_options.keys()), key=f"customer_agent_select_{user.id}")
         submit = st.form_submit_button(t(locale, "customer.save"))
     if submit:
         agent = user if user.role == UserRole.AGENT else agent_options[selected_agent_label]
@@ -830,7 +847,7 @@ def customer_page(user, locale: str) -> None:
     if customers:
         st.subheader(t(locale, "customer.followup_history"))
         customer_map = {f"{c.name} ({c.id})": c for c in filtered_customers or customers}
-        selected_customer = customer_map[st.selectbox(t(locale, "customer.customer"), list(customer_map.keys()))]
+        selected_customer = customer_map[st.selectbox(t(locale, "customer.customer"), list(customer_map.keys()), key=f"customer_followup_select_{user.id}")]
         with st.form("followup_form"):
             note = st.text_area(t(locale, "customer.followup_note"))
             next_action = st.text_input(t(locale, "customer.next_action"))
@@ -911,7 +928,7 @@ def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale
     target_agent_id = user.id
     if user.role != UserRole.AGENT and import_agents:
         agent_options = {f"{agent.name} ({agent.email})": agent.id for agent in import_agents}
-        selected_agent_label = st.selectbox(t(locale, "customer.import_agent"), list(agent_options.keys()))
+        selected_agent_label = st.selectbox(t(locale, "customer.import_agent"), list(agent_options.keys()), key=f"customer_import_agent_{user.id}")
         target_agent_id = agent_options[selected_agent_label]
     uploaded_csv = st.file_uploader(t(locale, "customer.upload_csv"), type=["csv"], key="customer_csv_import")
     if uploaded_csv:
@@ -932,7 +949,7 @@ def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale
     preview_dataframe = st.session_state.get("customer_csv_import_preview")
     if preview_dataframe is not None:
         confirm_col, cancel_col = st.columns(2)
-        if confirm_col.button(t(locale, "customer.confirm_import"), disabled=preview_dataframe.empty):
+        if confirm_col.button(t(locale, "customer.confirm_import"), disabled=preview_dataframe.empty, key=f"customer_confirm_import_{user.id}"):
             imported_count = import_customers_from_dataframe(
                 repo,
                 user,
@@ -943,7 +960,7 @@ def render_customer_csv_import(repo: SQLiteGroupTrainingRepository, user, locale
             st.session_state.pop("customer_csv_import_agent_id", None)
             st.success(t(locale, "customer.import_success", count=imported_count))
             st.rerun()
-        if cancel_col.button(t(locale, "customer.cancel_import")):
+        if cancel_col.button(t(locale, "customer.cancel_import"), key=f"customer_cancel_import_{user.id}"):
             st.session_state.pop("customer_csv_import_preview", None)
             st.session_state.pop("customer_csv_import_agent_id", None)
             st.rerun()
@@ -984,6 +1001,7 @@ def render_ocr_customer_form(user, locale: str, structured: dict) -> None:
             t(locale, "customer.stage"),
             list(stage_labels.keys()),
             index=list(stage_labels.keys()).index(default_stage_label) if default_stage_label in stage_labels else 0,
+            key=f"ocr_customer_stage_{user.id}",
         )
         source = st.text_input(t(locale, "ocr.source"), value=structured.get("source", ""))
         next_meeting = st.date_input(
@@ -994,7 +1012,7 @@ def render_ocr_customer_form(user, locale: str, structured: dict) -> None:
         next_action = st.text_input(t(locale, "customer.next_action"), value=structured.get("next_action", ""))
         selected_agent_label = None
         if user.role != UserRole.AGENT and agent_options:
-            selected_agent_label = st.selectbox(t(locale, "customer.agent"), list(agent_options.keys()), key="ocr_customer_agent")
+            selected_agent_label = st.selectbox(t(locale, "customer.agent"), list(agent_options.keys()), key=f"ocr_customer_agent_{user.id}")
         confirm = st.form_submit_button(t(locale, "ocr.confirm_save"))
     if confirm:
         agent = user if user.role == UserRole.AGENT else agent_options[selected_agent_label]
@@ -1032,7 +1050,7 @@ def render_ocr_daily_log_form(user, locale: str, structured: dict) -> None:
         notes = st.text_area(t(locale, "daily.notes"), value=structured.get("notes", ""))
         selected_agent_label = None
         if user.role != UserRole.AGENT and agent_options:
-            selected_agent_label = st.selectbox(t(locale, "daily.agent"), list(agent_options.keys()), key="ocr_daily_agent")
+            selected_agent_label = st.selectbox(t(locale, "daily.agent"), list(agent_options.keys()), key=f"ocr_daily_agent_{user.id}")
         confirm = st.form_submit_button(t(locale, "ocr.confirm_save"))
     if confirm:
         agent = user if user.role == UserRole.AGENT else agent_options[selected_agent_label]
@@ -1078,6 +1096,7 @@ def render_ocr_follow_up_form(user, locale: str, structured: dict) -> None:
             t(locale, "customer.customer"),
             list(customer_options.keys()),
             index=list(customer_options.keys()).index(matched_label),
+            key=f"ocr_followup_customer_{user.id}",
         )
         note = st.text_area(t(locale, "customer.followup_note"), value=structured.get("notes", ""))
         next_action = st.text_input(t(locale, "customer.next_action"), value=structured.get("next_action", ""))
@@ -1123,9 +1142,9 @@ def ocr_capture_page(user, locale: str) -> None:
 
     st.subheader(t(locale, "data.document_section"))
     st.caption(t(locale, "data.document_description"))
-    uploaded_file = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx"])
+    uploaded_file = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx"], key=f"ocr_upload_file_{user.id}")
     data_type_options = ocr_data_type_options(locale)
-    selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()))
+    selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()), key=f"ocr_data_type_{user.id}")
     selected_data_type = data_type_options[selected_data_type_label]
 
     file_bytes = b""
@@ -1149,7 +1168,7 @@ def ocr_capture_page(user, locale: str) -> None:
         else:
             st.info(t(locale, "ocr.non_image_received"))
 
-    if st.button(t(locale, "ocr.start_extract"), disabled=not bool(file_bytes)):
+    if st.button(t(locale, "ocr.start_extract"), disabled=not bool(file_bytes), key=f"ocr_start_extract_{user.id}"):
         extraction = extract_text_from_image(file_bytes)
         if not os.environ.get("GEMINI_API_KEY"):
             st.info(t(locale, "ocr.no_api_key"))
@@ -1207,12 +1226,18 @@ def today_schedule_page(user, locale: str) -> None:
 
 
 def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: str) -> None:
-    agents = visible_agents(repo, user)
+    agents = report_agents(repo, user)
+    agent_ids = {agent.id for agent in agents}
     visible_agent_id = user.id if user.role == UserRole.AGENT else None
     customers = repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
     logs = repo.list_logs(TENANT_ID, agent_id=visible_agent_id)
     reviews = repo.list_reviews(TENANT_ID, agent_id=visible_agent_id)
     scores = repo.list_closing_scores(TENANT_ID, agent_id=visible_agent_id)
+    if user.role != UserRole.AGENT:
+        customers = [customer for customer in customers if customer.agent_id in agent_ids]
+        logs = [log for log in logs if log.agent_id in agent_ids]
+        reviews = [review for review in reviews if review.agent_id in agent_ids]
+        scores = [score for score in scores if score.agent_id in agent_ids]
     insights = generate_demo_ai_insights(user, agents, customers, logs, reviews, scores)
     st.subheader(t(locale, "training.demo_insights"))
     if insights["today_outreach"] or insights["today_meetings"]:
@@ -1254,8 +1279,13 @@ def ai_training_page(user, locale: str) -> None:
     st.subheader(t(locale, "training.title"))
     render_scoring_basis(locale)
     render_demo_ai_insights(repo, user, locale)
-    reviews = repo.list_reviews(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
-    logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
+    if user.role == UserRole.AGENT:
+        reviews = repo.list_reviews(TENANT_ID, agent_id=user.id)
+        logs = repo.list_logs(TENANT_ID, agent_id=user.id)
+    else:
+        visible_agent_ids = {agent.id for agent in report_agents(repo, user)}
+        reviews = [review for review in repo.list_reviews(TENANT_ID) if review.agent_id in visible_agent_ids]
+        logs = [log for log in repo.list_logs(TENANT_ID) if log.agent_id in visible_agent_ids]
     log_index = logs_by_agent_and_date(logs)
     render_simple_table(
         pd.DataFrame(
@@ -1297,6 +1327,20 @@ def manager_dashboard_page(user, locale: str) -> None:
     render_demo_dataset_controls(repo, user, locale)
     manager_id = user.id if user.role == UserRole.MANAGER else "mgr_001"
     dashboard = DashboardService(repo).manager_dashboard(TENANT_ID, manager_id, user.role)
+    if user.role != UserRole.AGENT and not dashboard["agents"]:
+        agents = report_agents(repo, user)
+        agent_ids = {agent.id for agent in agents}
+        dashboard = {
+            "agents": agents,
+            "daily_logs": [log for log in repo.list_logs(TENANT_ID) if log.agent_id in agent_ids],
+            "reviews": [review for review in repo.list_reviews(TENANT_ID) if review.agent_id in agent_ids],
+            "closing_scores": [score for score in repo.list_closing_scores(TENANT_ID) if score.agent_id in agent_ids],
+            "high_risk_agent_ids": [
+                review.agent_id
+                for review in repo.list_reviews(TENANT_ID)
+                if review.agent_id in agent_ids and review.risk_level == "High"
+            ],
+        }
     team_ids = {agent.team_id for agent in dashboard["agents"] if agent.team_id}
     customers = [customer for team_id in team_ids for customer in repo.list_customers(TENANT_ID, team_id=team_id)]
     metrics = generate_demo_dashboard_metrics(
@@ -1402,7 +1446,7 @@ def main() -> None:
     }
     if user.role != UserRole.AGENT:
         pages[t(locale, "nav.manager_dashboard")] = manager_dashboard_page
-    selected_page = st.sidebar.radio(t(locale, "nav.label"), list(pages.keys()))
+    selected_page = st.sidebar.radio(t(locale, "nav.label"), list(pages.keys()), key=f"sidebar_nav_{user.id}")
     pages[selected_page](user, locale)
 
 

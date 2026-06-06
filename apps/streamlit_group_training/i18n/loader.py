@@ -10,7 +10,7 @@ from typing import Any
 
 DEFAULT_LOCALE = "zh_HK"
 SUPPORTED_LOCALES = {
-    "zh_HK": "繁體中文",
+    "zh_HK": "\u7e41\u9ad4\u4e2d\u6587",
     "en": "English",
 }
 

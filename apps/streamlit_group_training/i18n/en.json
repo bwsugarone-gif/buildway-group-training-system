@@ -246,11 +246,12 @@
   "dashboard.risk_agents": "Risk agents",
   "dashboard.top_agents": "Top 5 agents",
   "column.activity_score": "Activity score",
-  "training.demo_insights": "AI Demo Insights",
+  "training.demo_insights": "AI Training Insights",
   "training.today_recommendation": "Today recommendation: {outreach} outreach touches and {meetings} meetings recorded. Prioritize high-potential customers and confirm next actions before the end of day.",
-  "training.today_recommendation_empty": "No activity has been recorded today. Start with Warm or Hot customers and confirm the next meeting date.",
+  "training.today_recommendation_empty": "No activity has been recorded today. Follow up Warm or Hot customers and confirm the next meeting date.",
   "training.high_potential_customers": "High potential customers",
   "training.followup_customers": "Customers needing follow-up",
   "training.agent_activity_reminder": "Agent activity reminder: latest risk level is {risk}. Keep notes updated and confirm the next action for each active customer.",
-  "training.manager_team_recommendation": "Manager team recommendation: {low_active} low-activity agents and {risk_agents} risk agents need coaching attention."
+  "training.manager_team_recommendation": "Manager team recommendation: {low_active} low-activity agents and {risk_agents} risk agents need coaching attention.",
+  "demo.reset_success": "Demo data reset and reloaded: {agents} agents, {customers} customers, {logs} daily logs."
 }
