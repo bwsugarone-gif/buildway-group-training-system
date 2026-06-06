@@ -1,0 +1,264 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - button "keyboard_double_arrow_left" [ref=e418] [cursor=pointer]:
+      - generic [ref=e420]: keyboard_double_arrow_left
+    - generic [ref=e11]:
+      - generic [ref=e13]:
+        - paragraph [ref=e17]: 語言
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: 繁體中文
+            - combobox "Selected 繁體中文. 語言" [ref=e23]
+          - img "open" [ref=e25]
+      - paragraph [ref=e103]:
+        - text: 已登入：
+        - link "admin@buildway.demo" [ref=e104] [cursor=pointer]:
+          - /url: mailto:admin@buildway.demo
+      - button "登出" [ref=e107] [cursor=pointer]:
+        - paragraph [ref=e111]: 登出
+      - paragraph [ref=e116]: 租戶 ID：tenant_buildway_demo
+      - paragraph [ref=e121]: 用戶 ID：admin_001
+      - paragraph [ref=e126]: 角色：管理員
+      - generic [ref=e128]:
+        - paragraph [ref=e132]: 導覽
+        - radiogroup "導覽" [ref=e133] [cursor=pointer]:
+          - generic [ref=e134]:
+            - radio "客戶管理"
+            - paragraph [ref=e139]: 客戶管理
+          - generic [ref=e140]:
+            - radio "每日工作記錄"
+            - paragraph [ref=e145]: 每日工作記錄
+          - generic [ref=e146]:
+            - radio "今日行程"
+            - paragraph [ref=e151]: 今日行程
+          - generic [ref=e152]:
+            - radio "AI 培訓助理"
+            - paragraph [ref=e157]: AI 培訓助理
+          - generic [ref=e158]:
+            - radio "主管儀表板" [checked] [active]
+            - paragraph [ref=e163]: 主管儀表板
+  - generic [ref=e3]:
+    - banner [ref=e29]:
+      - generic [ref=e32]:
+        - button "Deploy" [ref=e34] [cursor=pointer]:
+          - generic [ref=e36]: Deploy
+        - button "Main menu" [ref=e38] [cursor=pointer]:
+          - img [ref=e39]
+    - generic [ref=e42]:
+      - heading "Buildway AI 團隊培訓系統" [level=1] [ref=e47]:
+        - text: Buildway AI 團隊培訓系統
+        - generic [ref=e48]:
+          - link "Link to heading":
+            - /url: "#buildway-ai"
+            - img
+      - paragraph [ref=e53]: Phase 1.3 本地化 / i18n - SQLite MVP
+      - heading "主管儀表板" [level=3] [ref=e421]:
+        - text: 主管儀表板
+        - generic [ref=e59]:
+          - link "Link to heading":
+            - /url: "#57a44f50"
+            - img
+      - group [ref=e423]:
+        - generic "keyboard_arrow_right AI 評分基準說明" [ref=e424] [cursor=pointer]:
+          - generic [ref=e425]:
+            - generic [ref=e427]: keyboard_arrow_right
+            - paragraph [ref=e430]: AI 評分基準說明
+      - generic [ref=e432]:
+        - generic [ref=e437]:
+          - paragraph [ref=e440]: 團隊代理
+          - paragraph [ref=e443]: "1"
+        - generic [ref=e448]:
+          - paragraph [ref=e451]: 每日紀錄
+          - paragraph [ref=e454]: "2"
+        - generic [ref=e459]:
+          - paragraph [ref=e462]: AI 評核
+          - paragraph [ref=e465]: "2"
+        - generic [ref=e470]:
+          - paragraph [ref=e473]: 高風險成員
+          - paragraph [ref=e476]: "0"
+      - generic [ref=e478]:
+        - generic [ref=e480]:
+          - paragraph [ref=e485]: 每日工作趨勢
+          - generic [ref=e488]:
+            - generic [ref=e490]:
+              - button "Show data" [ref=e493] [cursor=pointer]:
+                - img [ref=e494]
+              - button "Fullscreen" [ref=e499] [cursor=pointer]:
+                - img [ref=e500]
+            - generic [ref=e503]:
+              - generic "Vega visualization" [ref=e504]:
+                - img [ref=e505]:
+                  - generic [ref=e510]:
+                    - 'generic "X-axis for a discrete scale with 1 value: 2026-06-06" [ref=e514]':
+                      - generic [ref=e516]:
+                        - generic:
+                          - generic: 2026-06-06
+                    - generic "Y-axis for a linear scale with values from 0 to 35" [ref=e517]:
+                      - generic [ref=e519]:
+                        - generic:
+                          - generic: "0"
+                          - generic: "10"
+                          - generic: "20"
+                          - generic: "30"
+                    - generic [ref=e520]:
+                      - 'generic "date: 2026-06-06; count: 34; activity_label: 通話; : 通話; 日期: 2026-06-06; 工作類型: 通話; 數量: 34" [ref=e528]'
+                      - 'generic "date: 2026-06-06; count: 19; activity_label: WhatsApp; : WhatsApp; 日期: 2026-06-06; 工作類型: WhatsApp; 數量: 19" [ref=e536]'
+                      - 'generic "date: 2026-06-06; count: 5; activity_label: 預約; : 預約; 日期: 2026-06-06; 工作類型: 預約; 數量: 5" [ref=e544]'
+                      - 'generic "date: 2026-06-06; count: 3; activity_label: 會議; : 會議; 日期: 2026-06-06; 工作類型: 會議; 數量: 3" [ref=e552]'
+                      - 'generic "date: 2026-06-06; count: 4; activity_label: 成交; : 成交; 日期: 2026-06-06; 工作類型: 成交; 數量: 4" [ref=e560]'
+                    - 'generic "Symbol legend titled '' '' for fill color with 5 values: 通話, WhatsApp, 預約, 會議, 成交" [ref=e561]':
+                      - generic [ref=e567]:
+                        - generic [ref=e569]:
+                          - generic:
+                            - generic: 通話
+                        - generic [ref=e571]:
+                          - generic:
+                            - generic: WhatsApp
+                        - generic [ref=e573]:
+                          - generic:
+                            - generic: 預約
+                        - generic [ref=e575]:
+                          - generic:
+                            - generic: 會議
+                        - generic [ref=e577]:
+                          - generic:
+                            - generic: 成交
+              - group "Click to view actions":
+                - img [ref=e579] [cursor=pointer]
+        - generic [ref=e584]:
+          - paragraph [ref=e589]: 各階段客戶
+          - generic [ref=e592]:
+            - generic [ref=e594]:
+              - button "Show data" [ref=e597] [cursor=pointer]:
+                - img [ref=e598]
+              - button "Fullscreen" [ref=e603] [cursor=pointer]:
+                - img [ref=e604]
+            - generic [ref=e607]:
+              - generic "Vega visualization" [ref=e608]:
+                - img [ref=e609]:
+                  - generic [ref=e614]:
+                    - generic "X-axis for a linear scale with values from 0.0 to 1.0" [ref=e618]:
+                      - generic [ref=e620]:
+                        - generic:
+                          - generic: "0.0"
+                          - generic: "0.5"
+                          - generic: "1.0"
+                    - 'generic "Y-axis for a discrete scale with 6 values: 冷, 暖, 熱, 方案, 已成交, 已流失" [ref=e621]':
+                      - generic [ref=e623]:
+                        - generic:
+                          - generic: 冷
+                          - generic: 暖
+                          - generic: 熱
+                          - generic: 方案
+                          - generic: 已成交
+                          - generic: 已流失
+                    - generic [ref=e624]:
+                      - 'generic "count: 1; stage: 冷; : 冷; 階段: 冷; 客戶數量: 1" [ref=e632]'
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - 'generic "count: 0; stage: 暖; : 暖; 階段: 暖; 客戶數量: 0"'
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - 'generic "count: 0; stage: 熱; : 熱; 階段: 熱; 客戶數量: 0"'
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - 'generic "count: 0; stage: 方案; : 方案; 階段: 方案; 客戶數量: 0"'
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - 'generic "count: 0; stage: 已成交; : 已成交; 階段: 已成交; 客戶數量: 0"'
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - 'generic "count: 0; stage: 已流失; : 已流失; 階段: 已流失; 客戶數量: 0"'
+              - group "Click to view actions":
+                - img [ref=e634] [cursor=pointer]
+      - generic [ref=e639]:
+        - generic [ref=e641]:
+          - paragraph [ref=e646]: 團隊下線
+          - generic [ref=e651]:
+            - button "Show/hide columns" [ref=e655] [cursor=pointer]:
+              - img [ref=e656]
+            - button "Download as CSV" [ref=e661] [cursor=pointer]:
+              - img [ref=e662]
+            - button "Search" [ref=e667] [cursor=pointer]:
+              - img [ref=e668]
+            - button "Fullscreen" [ref=e673] [cursor=pointer]:
+              - img [ref=e674]
+        - generic [ref=e686]:
+          - paragraph [ref=e691]: 隱藏成交評分
+          - generic [ref=e694]:
+            - paragraph [ref=e697]: 各代理平均隱藏評分
+            - paragraph [ref=e700]: "91.0"
+          - generic [ref=e703]:
+            - generic [ref=e705]:
+              - button "Show data" [ref=e708] [cursor=pointer]:
+                - img [ref=e709]
+              - button "Fullscreen" [ref=e714] [cursor=pointer]:
+                - img [ref=e715]
+            - generic [ref=e718]:
+              - generic "Vega visualization" [ref=e719]:
+                - img [ref=e720]:
+                  - generic [ref=e725]:
+                    - generic "X-axis for a linear scale with values from 0 to 100" [ref=e729]:
+                      - generic [ref=e731]:
+                        - generic:
+                          - generic: "0"
+                          - generic: "25"
+                          - generic: "50"
+                          - generic: "75"
+                          - generic: "100"
+                    - 'generic "Y-axis for a discrete scale with 1 value: agt_001" [ref=e732]':
+                      - generic [ref=e734]:
+                        - generic:
+                          - generic: agt_001
+                    - 'generic "average_hidden_score: 91; agent_id: agt_001; : 低風險; 代理 ID: agt_001; 平均隱藏評分: 91.0; 風險提示: 低風險" [ref=e743]'
+                    - 'generic "Symbol legend titled '' '' for fill color with 3 values: 低風險, 中風險, 高風險" [ref=e744]':
+                      - generic [ref=e750]:
+                        - generic [ref=e752]:
+                          - generic:
+                            - generic: 低風險
+                        - generic [ref=e754]:
+                          - generic:
+                            - generic: 中風險
+                        - generic [ref=e756]:
+                          - generic:
+                            - generic: 高風險
+              - group "Click to view actions":
+                - img [ref=e758] [cursor=pointer]
+          - generic [ref=e766]:
+            - button "Show/hide columns" [ref=e770] [cursor=pointer]:
+              - img [ref=e771]
+            - button "Download as CSV" [ref=e776] [cursor=pointer]:
+              - img [ref=e777]
+            - button "Search" [ref=e782] [cursor=pointer]:
+              - img [ref=e783]
+            - button "Fullscreen" [ref=e788] [cursor=pointer]:
+              - img [ref=e789]
+          - generic [ref=e804]:
+            - button "Show/hide columns" [ref=e808] [cursor=pointer]:
+              - img [ref=e809]
+            - button "Download as CSV" [ref=e814] [cursor=pointer]:
+              - img [ref=e815]
+            - button "Search" [ref=e820] [cursor=pointer]:
+              - img [ref=e821]
+            - button "Fullscreen" [ref=e826] [cursor=pointer]:
+              - img [ref=e827]

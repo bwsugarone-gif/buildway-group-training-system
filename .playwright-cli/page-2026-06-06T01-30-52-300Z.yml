@@ -1,0 +1,154 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - button "keyboard_double_arrow_left" [ref=e418] [cursor=pointer]:
+      - generic [ref=e420]: keyboard_double_arrow_left
+    - generic [ref=e11]:
+      - generic [ref=e13]:
+        - paragraph [ref=e17]: Language
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: English
+            - combobox "Selected English. Language" [active] [ref=e854]
+          - img "open" [ref=e25]
+      - paragraph [ref=e103]:
+        - text: "Signed in:"
+        - link "admin@buildway.demo" [ref=e104] [cursor=pointer]:
+          - /url: mailto:admin@buildway.demo
+      - button "Logout" [ref=e857] [cursor=pointer]:
+        - paragraph [ref=e861]: Logout
+      - paragraph [ref=e116]: "tenant_id: tenant_buildway_demo"
+      - paragraph [ref=e121]: "user_id: admin_001"
+      - paragraph [ref=e126]: "role: Admin"
+      - generic [ref=e863]:
+        - paragraph [ref=e867]: Navigation
+        - radiogroup "Navigation" [ref=e868] [cursor=pointer]:
+          - generic [ref=e869]:
+            - radio "Customer CRM" [checked]
+            - paragraph [ref=e874]: Customer CRM
+          - generic [ref=e875]:
+            - radio "Daily Activity Log"
+            - paragraph [ref=e880]: Daily Activity Log
+          - generic [ref=e881]:
+            - radio "Today Schedule"
+            - paragraph [ref=e886]: Today Schedule
+          - generic [ref=e887]:
+            - radio "AI Training Agent"
+            - paragraph [ref=e892]: AI Training Agent
+          - generic [ref=e893]:
+            - radio "Manager Dashboard"
+            - paragraph [ref=e898]: Manager Dashboard
+  - generic [ref=e3]:
+    - banner [ref=e29]:
+      - generic [ref=e32]:
+        - button "Deploy" [ref=e34] [cursor=pointer]:
+          - generic [ref=e36]: Deploy
+        - button "Main menu" [ref=e38] [cursor=pointer]:
+          - img [ref=e39]
+    - generic [ref=e42]:
+      - heading "Buildway AI Group Training System" [level=1] [ref=e899]:
+        - text: Buildway AI Group Training System
+        - generic [ref=e48]:
+          - link "Link to heading":
+            - /url: "#buildway-ai"
+            - img
+      - paragraph [ref=e53]: Phase 1.3 Localization / i18n - SQLite MVP
+      - heading "Customer CRM" [level=3] [ref=e900]:
+        - text: Customer CRM
+        - generic [ref=e59]:
+          - link "Link to heading":
+            - /url: "#57a44f50"
+            - img
+      - generic [ref=e901]:
+        - generic [ref=e905]:
+          - paragraph [ref=e909]: Search customers
+          - textbox "Search customers" [ref=e912]:
+            - /placeholder: Name, phone, notes, or agent
+        - generic [ref=e916]:
+          - paragraph [ref=e920]: Stage filter
+          - generic [ref=e922]:
+            - generic [ref=e923]:
+              - generic [ref=e924]: All
+              - combobox "Selected All. Stage filter" [ref=e926]
+            - img "open" [ref=e928]
+      - button "Export customers CSV" [ref=e934] [cursor=pointer]:
+        - paragraph [ref=e938]: Export customers CSV
+      - paragraph [ref=e943]: Showing 1 of 1 customers
+      - generic [ref=e948]:
+        - button "Show/hide columns" [ref=e952] [cursor=pointer]:
+          - img [ref=e953]
+        - button "Download as CSV" [ref=e958] [cursor=pointer]:
+          - img [ref=e959]
+        - button "Search" [ref=e964] [cursor=pointer]:
+          - img [ref=e965]
+        - button "Fullscreen" [ref=e970] [cursor=pointer]:
+          - img [ref=e971]
+      - generic [ref=e984]:
+        - paragraph [ref=e989]: Add customer
+        - generic [ref=e991]:
+          - paragraph [ref=e995]: Name
+          - textbox "Name" [ref=e998]:
+            - /placeholder: ""
+        - generic [ref=e1000]:
+          - paragraph [ref=e1004]: Phone
+          - textbox "Phone" [ref=e1007]:
+            - /placeholder: ""
+        - generic [ref=e1009]:
+          - paragraph [ref=e1013]: Stage
+          - generic [ref=e1015]:
+            - generic [ref=e1016]:
+              - generic [ref=e1017]: Cold
+              - combobox "Selected Cold. Stage" [ref=e1019]
+            - img "open" [ref=e1021]
+        - generic [ref=e1024]:
+          - paragraph [ref=e1028]: Next meeting date
+          - textbox "Select a date." [ref=e1032]:
+            - /placeholder: YYYY/MM/DD
+            - text: 2026/06/06
+          - paragraph: Press the down arrow key to interact with the calendar and select a date. Press the escape button to close the calendar.
+          - paragraph: Selected date is 2026/06/06. Select the second date.
+        - generic [ref=e1034]:
+          - paragraph [ref=e1038]: Notes
+          - textbox "Notes" [ref=e1041]:
+            - /placeholder: ""
+        - generic [ref=e1043]:
+          - paragraph [ref=e1047]: Agent
+          - generic [ref=e1049]:
+            - generic [ref=e1050]:
+              - generic [ref=e1051]: Agent (agent@buildway.demo)
+              - combobox "Selected Agent (agent@buildway.demo). Agent" [ref=e1053]
+            - img "open" [ref=e1055]
+        - button "Save customer" [ref=e1060] [cursor=pointer]:
+          - paragraph [ref=e1064]: Save customer
+      - heading "Follow-up history" [level=3] [ref=e1069]:
+        - text: Follow-up history
+        - generic [ref=e1070]:
+          - link "Link to heading":
+            - /url: "#follow-up-history"
+            - img
+      - generic [ref=e1072]:
+        - paragraph [ref=e1076]: Customer
+        - generic [ref=e1078]:
+          - generic [ref=e1079]:
+            - generic [ref=e1080]: joe (cust_53d5037dc5a0)
+            - combobox "Selected joe (cust_53d5037dc5a0). Customer" [ref=e1082]
+          - img "open" [ref=e1084]
+      - generic [ref=e1088]:
+        - generic [ref=e1090]:
+          - paragraph [ref=e1094]: Follow-up note
+          - textbox "Follow-up note" [ref=e1097]:
+            - /placeholder: ""
+        - generic [ref=e1099]:
+          - paragraph [ref=e1103]: Next action
+          - textbox "Next action" [ref=e1106]:
+            - /placeholder: ""
+        - button "Save follow-up" [ref=e1110] [cursor=pointer]:
+          - paragraph [ref=e1114]: Save follow-up
+      - generic [ref=e1119]:
+        - button "Show/hide columns" [ref=e1123] [cursor=pointer]:
+          - img [ref=e1124]
+        - button "Download as CSV" [ref=e1129] [cursor=pointer]:
+          - img [ref=e1130]
+        - button "Search" [ref=e1135] [cursor=pointer]:
+          - img [ref=e1136]
+        - button "Fullscreen" [ref=e1141] [cursor=pointer]:
+          - img [ref=e1142]

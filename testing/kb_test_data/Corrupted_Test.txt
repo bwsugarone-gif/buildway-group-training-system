@@ -1,0 +1,128 @@
+CORRUPTED FILE TEST - PARSER ERROR HANDLING
+
+This file intentionally contains formatting issues to test RAG system robustness.
+
+===== SECTION 1: MIXED ENCODING =====
+Product Name: Stainless Steel Water Bottle
+Price: USD 3.50 - 5.80
+MOQ: 500 units
+
+中文混合测试：不锈钢水瓶
+Español mezclado: Botella de agua de acero inoxidable
+Français mélangé: Bouteille d'eau en acier inoxydable
+
+===== SECTION 2: EXCESSIVE WHITESPACE =====
+
+
+Product:        Bamboo Cutting Board
+
+
+Price:                  USD 8.00 - 12.50
+
+
+MOQ:         1000        units
+
+
+===== SECTION 3: BROKEN TABLES =====
+
+| Product | Price | MOQ
+Yoga Mat | USD 7.00 | 500
+| LED Lamp USD 12.00 500 units
+Bluetooth Speaker | | 1000
+
+===== SECTION 4: MALFORMED LISTS =====
+
+Payment Methods:
+- T/T
+-- PayPal
+--- L/C
+---- Credit Card
+----- Western Union
+
+Shipping Options
+* Sea Freight
+** Air Freight
+*** Express Courier
+
+===== SECTION 5: INCONSISTENT LINE BREAKS =====
+Lead Time for Standard Products is 15-20 days after deposit.
+Customized Products require 25-35 days.Rush orders available with surcharge.Sample production takes 5-7 days.Express shipping 3-5 days.Total time approximately 10-12 days from payment to delivery.
+
+===== SECTION 6: SPECIAL CHARACTERS =====
+Price Range: $3.50 ~ $5.80 (USD)
+Discount: 10% - 15% off
+Email: sales@example.com
+Phone: +86-138-xxxx-xxxx
+Website: https://www.example.com/products?id=12345&category=water-bottles
+
+===== SECTION 7: DUPLICATE CONTENT =====
+MOQ is 500 units.
+MOQ is 500 units.
+MOQ is 500 units.
+The minimum order quantity is 500 units.
+Minimum order: 500 units.
+500 units minimum order quantity.
+
+===== SECTION 8: INCOMPLETE SENTENCES =====
+Our company provides
+We offer customization including
+Payment terms are 30% deposit and
+Shipping methods available
+Quality control process includes
+
+===== SECTION 9: RANDOM SYMBOLS =====
+*** IMPORTANT ***
+!!! URGENT !!!
+### NOTICE ###
+@@@ ATTENTION @@@
+%%% DISCOUNT %%%
+&&& SPECIAL OFFER &&&
+
+===== SECTION 10: MIXED CASE =====
+pRoDuCt NaMe: StAiNlEsS sTeEl WaTeR bOtTlE
+PRICE: usd 3.50 - 5.80
+moq: 500 UNITS
+lead TIME: 15-20 Days
+
+===== SECTION 11: EMBEDDED CODE =====
+<html>
+<body>
+<h1>Product Catalog</h1>
+<p>Price: $3.50</p>
+</body>
+</html>
+
+SELECT * FROM products WHERE price > 3.50;
+
+def calculate_price(quantity):
+    return quantity * 3.50
+
+===== SECTION 12: VERY LONG SINGLE LINE =====
+This is an extremely long line of text that contains product information including the product name which is Stainless Steel Water Bottle and the price range which is USD 3.50 to 5.80 and the minimum order quantity which is 500 units and the lead time which is 15 to 20 days and the shipping methods which include sea freight air freight and express courier and the payment terms which are 30 percent deposit and 70 percent balance before shipment and the warranty period which is 12 months and the certifications which include CE RoHS FDA and ISO9001 and the customization options which include logo printing packaging design and color customization and the sample cost which is 50 to 150 dollars per item and the sample production time which is 5 to 7 days and the express shipping time which is 3 to 5 days and the total time from payment to delivery which is approximately 10 to 12 days.
+
+===== SECTION 13: NULL AND EMPTY VALUES =====
+Product Name: 
+Price: NULL
+MOQ: 
+Lead Time: N/A
+Shipping: 
+Payment: undefined
+Warranty: 
+Certification: none
+
+===== SECTION 14: CONTRADICTORY INFORMATION =====
+MOQ is 500 units.
+MOQ is 1000 units.
+Minimum order quantity: 200 units.
+No minimum order required.
+MOQ varies by product.
+
+Price: USD 3.50
+Price: USD 5.80
+Price: USD 10.00
+Price: Contact for quote
+
+===== END OF CORRUPTED FILE =====
+
+Note: This file should trigger various parser warnings but should not crash the system.
+The RAG loader should handle these gracefully and extract whatever valid information it can.

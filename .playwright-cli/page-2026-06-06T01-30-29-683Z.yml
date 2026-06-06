@@ -1,0 +1,151 @@
+- generic [ref=e2]:
+  - generic [ref=e11]:
+    - generic [ref=e13]:
+      - paragraph [ref=e17]: 語言
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: 繁體中文
+          - combobox "Selected 繁體中文. 語言" [ref=e23]
+        - img "open" [ref=e25]
+    - paragraph [ref=e103]:
+      - text: 已登入：
+      - link "admin@buildway.demo" [ref=e104] [cursor=pointer]:
+        - /url: mailto:admin@buildway.demo
+    - button "登出" [ref=e107] [cursor=pointer]:
+      - paragraph [ref=e111]: 登出
+    - paragraph [ref=e116]: 租戶 ID：tenant_buildway_demo
+    - paragraph [ref=e121]: 用戶 ID：admin_001
+    - paragraph [ref=e126]: 角色：管理員
+    - generic [ref=e128]:
+      - paragraph [ref=e132]: 導覽
+      - radiogroup "導覽" [ref=e133] [cursor=pointer]:
+        - generic [ref=e134]:
+          - radio "客戶管理" [checked]
+          - paragraph [ref=e139]: 客戶管理
+        - generic [ref=e140]:
+          - radio "每日工作記錄"
+          - paragraph [ref=e145]: 每日工作記錄
+        - generic [ref=e146]:
+          - radio "今日行程"
+          - paragraph [ref=e151]: 今日行程
+        - generic [ref=e152]:
+          - radio "AI 培訓助理"
+          - paragraph [ref=e157]: AI 培訓助理
+        - generic [ref=e158]:
+          - radio "主管儀表板"
+          - paragraph [ref=e163]: 主管儀表板
+  - generic [ref=e3]:
+    - banner [ref=e29]:
+      - generic [ref=e32]:
+        - button "Deploy" [ref=e34] [cursor=pointer]:
+          - generic [ref=e36]: Deploy
+        - button "Main menu" [ref=e38] [cursor=pointer]:
+          - img [ref=e39]
+    - generic [ref=e42]:
+      - heading "Buildway AI 團隊培訓系統" [level=1] [ref=e47]:
+        - text: Buildway AI 團隊培訓系統
+        - generic [ref=e48]:
+          - link "Link to heading":
+            - /url: "#buildway-ai"
+            - img
+      - paragraph [ref=e53]: Phase 1.3 本地化 / i18n - SQLite MVP
+      - heading "客戶管理" [level=3] [ref=e164]:
+        - text: 客戶管理
+        - generic [ref=e59]:
+          - link "Link to heading":
+            - /url: "#57a44f50"
+            - img
+      - generic [ref=e165]:
+        - generic [ref=e169]:
+          - paragraph [ref=e173]: 搜尋客戶
+          - textbox "搜尋客戶" [ref=e176]:
+            - /placeholder: 姓名、電話、備註或代理
+        - generic [ref=e180]:
+          - paragraph [ref=e184]: 客戶階段
+          - generic [ref=e186]:
+            - generic [ref=e187]:
+              - generic [ref=e188]: 全部
+              - combobox "Selected 全部. 客戶階段" [ref=e190]
+            - img "open" [ref=e192]
+      - button "匯出客戶 CSV" [ref=e198] [cursor=pointer]:
+        - paragraph [ref=e202]: 匯出客戶 CSV
+      - paragraph [ref=e207]: 顯示 1 / 1 位客戶
+      - generic [ref=e212]:
+        - button "Show/hide columns" [ref=e216] [cursor=pointer]:
+          - img [ref=e217]
+        - button "Download as CSV" [ref=e222] [cursor=pointer]:
+          - img [ref=e223]
+        - button "Search" [ref=e228] [cursor=pointer]:
+          - img [ref=e229]
+        - button "Fullscreen" [ref=e234] [cursor=pointer]:
+          - img [ref=e235]
+      - generic [ref=e248]:
+        - paragraph [ref=e253]: 新增客戶
+        - generic [ref=e255]:
+          - paragraph [ref=e259]: 姓名
+          - textbox "姓名" [ref=e262]:
+            - /placeholder: ""
+        - generic [ref=e264]:
+          - paragraph [ref=e268]: 電話
+          - textbox "電話" [ref=e271]:
+            - /placeholder: ""
+        - generic [ref=e273]:
+          - paragraph [ref=e277]: 客戶階段
+          - generic [ref=e279]:
+            - generic [ref=e280]:
+              - generic [ref=e281]: 冷
+              - combobox "Selected 冷. 客戶階段" [ref=e283]
+            - img "open" [ref=e285]
+        - generic [ref=e288]:
+          - paragraph [ref=e292]: 下次會議日期
+          - textbox "Select a date." [ref=e296]:
+            - /placeholder: YYYY/MM/DD
+            - text: 2026/06/06
+          - paragraph: Press the down arrow key to interact with the calendar and select a date. Press the escape button to close the calendar.
+          - paragraph: Selected date is 2026/06/06. Select the second date.
+        - generic [ref=e298]:
+          - paragraph [ref=e302]: 備註
+          - textbox "備註" [ref=e305]:
+            - /placeholder: ""
+        - generic [ref=e307]:
+          - paragraph [ref=e311]: 代理
+          - generic [ref=e313]:
+            - generic [ref=e314]:
+              - generic [ref=e315]: Agent (agent@buildway.demo)
+              - combobox "Selected Agent (agent@buildway.demo). 代理" [ref=e317]
+            - img "open" [ref=e319]
+        - button "儲存客戶" [ref=e324] [cursor=pointer]:
+          - paragraph [ref=e328]: 儲存客戶
+      - heading "跟進記錄" [level=3] [ref=e333]:
+        - text: 跟進記錄
+        - generic [ref=e334]:
+          - link "Link to heading":
+            - /url: "#4cfd8c0"
+            - img
+      - generic [ref=e336]:
+        - paragraph [ref=e340]: 客戶
+        - generic [ref=e342]:
+          - generic [ref=e343]:
+            - generic [ref=e344]: joe (cust_53d5037dc5a0)
+            - combobox "Selected joe (cust_53d5037dc5a0). 客戶" [ref=e346]
+          - img "open" [ref=e348]
+      - generic [ref=e352]:
+        - generic [ref=e354]:
+          - paragraph [ref=e358]: 跟進備註
+          - textbox "跟進備註" [ref=e361]:
+            - /placeholder: ""
+        - generic [ref=e363]:
+          - paragraph [ref=e367]: 下一步行動
+          - textbox "下一步行動" [ref=e370]:
+            - /placeholder: ""
+        - button "儲存跟進" [ref=e374] [cursor=pointer]:
+          - paragraph [ref=e378]: 儲存跟進
+      - generic [ref=e383]:
+        - button "Show/hide columns" [ref=e387] [cursor=pointer]:
+          - img [ref=e388]
+        - button "Download as CSV" [ref=e393] [cursor=pointer]:
+          - img [ref=e394]
+        - button "Search" [ref=e399] [cursor=pointer]:
+          - img [ref=e400]
+        - button "Fullscreen" [ref=e405] [cursor=pointer]:
+          - img [ref=e406]

@@ -1,0 +1,74 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - button "keyboard_double_arrow_left" [ref=e418] [cursor=pointer]:
+      - generic [ref=e420]: keyboard_double_arrow_left
+    - generic [ref=e11]:
+      - generic [ref=e13]:
+        - paragraph [ref=e17]: 語言
+        - generic [ref=e19]:
+          - generic [ref=e20]:
+            - generic [ref=e21]: 繁體中文
+            - combobox "Selected 繁體中文. 語言" [ref=e23]
+          - img "open" [ref=e25]
+      - paragraph [ref=e103]:
+        - text: 已登入：
+        - link "admin@buildway.demo" [ref=e104] [cursor=pointer]:
+          - /url: mailto:admin@buildway.demo
+      - button "登出" [ref=e107] [cursor=pointer]:
+        - paragraph [ref=e111]: 登出
+      - paragraph [ref=e116]: 租戶 ID：tenant_buildway_demo
+      - paragraph [ref=e121]: 用戶 ID：admin_001
+      - paragraph [ref=e126]: 角色：管理員
+      - generic [ref=e128]:
+        - paragraph [ref=e132]: 導覽
+        - radiogroup "導覽" [ref=e133] [cursor=pointer]:
+          - generic [ref=e134]:
+            - radio "客戶管理"
+            - paragraph [ref=e139]: 客戶管理
+          - generic [ref=e140]:
+            - radio "每日工作記錄"
+            - paragraph [ref=e145]: 每日工作記錄
+          - generic [ref=e146]:
+            - radio "今日行程"
+            - paragraph [ref=e151]: 今日行程
+          - generic [ref=e152]:
+            - radio "AI 培訓助理" [checked] [active]
+            - paragraph [ref=e157]: AI 培訓助理
+          - generic [ref=e158]:
+            - radio "主管儀表板"
+            - paragraph [ref=e163]: 主管儀表板
+  - generic [ref=e3]:
+    - banner [ref=e29]:
+      - generic [ref=e32]:
+        - button "Deploy" [ref=e34] [cursor=pointer]:
+          - generic [ref=e36]: Deploy
+        - button "Main menu" [ref=e38] [cursor=pointer]:
+          - img [ref=e39]
+    - generic [ref=e42]:
+      - heading "Buildway AI 團隊培訓系統" [level=1] [ref=e47]:
+        - text: Buildway AI 團隊培訓系統
+        - generic [ref=e48]:
+          - link "Link to heading":
+            - /url: "#buildway-ai"
+            - img
+      - paragraph [ref=e53]: Phase 1.3 本地化 / i18n - SQLite MVP
+      - heading "AI 培訓助理" [level=3] [ref=e421]:
+        - text: AI 培訓助理
+        - generic [ref=e59]:
+          - link "Link to heading":
+            - /url: "#57a44f50"
+            - img
+      - group [ref=e423]:
+        - generic "keyboard_arrow_right AI 評分基準說明" [ref=e424] [cursor=pointer]:
+          - generic [ref=e425]:
+            - generic [ref=e427]: keyboard_arrow_right
+            - paragraph [ref=e430]: AI 評分基準說明
+      - generic [ref=e435]:
+        - button "Show/hide columns" [ref=e439] [cursor=pointer]:
+          - img [ref=e440]
+        - button "Download as CSV" [ref=e445] [cursor=pointer]:
+          - img [ref=e446]
+        - button "Search" [ref=e451] [cursor=pointer]:
+          - img [ref=e452]
+        - button "Fullscreen" [ref=e457] [cursor=pointer]:
+          - img [ref=e458]
