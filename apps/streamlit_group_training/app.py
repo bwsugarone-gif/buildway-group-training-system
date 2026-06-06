@@ -80,6 +80,10 @@ def translated_risk(locale: str, risk_level: str) -> str:
     return t(locale, f"risk.{risk}")
 
 
+def yes_no(locale: str, value: bool) -> str:
+    return t(locale, "common.yes" if value else "common.no")
+
+
 def parse_iso_date_or_today(value: str) -> date:
     try:
         return date.fromisoformat(value)
@@ -459,7 +463,7 @@ def customers_to_dataframe(customers, locale: str) -> pd.DataFrame:
                 "agent_id": c.agent_id,
                 "phone": c.phone,
                 "next_meeting_date": c.next_meeting_date.isoformat() if c.next_meeting_date else "",
-                "today_meeting": c.next_meeting_date == date.today(),
+                "today_meeting": yes_no(locale, c.next_meeting_date == date.today()),
                 "notes": c.notes,
                 "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
             }
@@ -489,7 +493,7 @@ def today_schedule_to_dataframe(customers, locale: str) -> pd.DataFrame:
                 "stage": translated_stage(locale, customer.stage.value),
                 "agent_id": customer.agent_id,
                 "notes": customer.notes,
-                "today_meeting": customer.next_meeting_date == date.today(),
+                "today_meeting": yes_no(locale, customer.next_meeting_date == date.today()),
                 "priority": t(locale, schedule_priority_key(customer.stage)),
             }
             for customer in sorted_customers
@@ -544,6 +548,32 @@ def daily_logs_to_dataframe(logs) -> pd.DataFrame:
             "notes",
             "created_at",
         ],
+    )
+
+
+def visible_followups_to_dataframe(repo: SQLiteGroupTrainingRepository, user, locale: str, pending_only: bool = False) -> pd.DataFrame:
+    customers = repo.list_customers(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
+    customer_map = {customer.id: customer for customer in customers}
+    visible_agent_ids = {user.id} if user.role == UserRole.AGENT else {customer.agent_id for customer in customers}
+    followups = [
+        followup
+        for followup in repo.list_followups(TENANT_ID)
+        if followup.agent_id in visible_agent_ids and followup.customer_id in customer_map
+    ]
+    if pending_only:
+        followups = [followup for followup in followups if followup.next_action.strip()]
+    return pd.DataFrame(
+        [
+            {
+                "customer": customer_map[followup.customer_id].name,
+                "agent_id": followup.agent_id,
+                "note": followup.note,
+                "next_action": followup.next_action,
+                "created_at": followup.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+            for followup in followups
+        ],
+        columns=["customer", "agent_id", "note", "next_action", "created_at"],
     )
 
 
@@ -773,6 +803,16 @@ def customer_page(user, locale: str) -> None:
             use_container_width=True,
             hide_index=True,
         )
+    recent_followups_df = visible_followups_to_dataframe(repo, user, locale)
+    st.subheader(t(locale, "customer.recent_followups"))
+    if recent_followups_df.empty:
+        st.info(t(locale, "customer.no_recent_followups"))
+    else:
+        st.dataframe(
+            localize_columns(recent_followups_df, locale),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def daily_log_page(user, locale: str) -> None:
@@ -977,19 +1017,34 @@ def ocr_capture_page(user, locale: str) -> None:
     st.caption(t(locale, "ocr.description"))
     if st.session_state.pop("ocr_flash_success", False):
         st.success(t(locale, "ocr.save_success"))
-    uploaded_image = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg"])
+    uploaded_file = st.file_uploader(t(locale, "ocr.upload_image"), type=["png", "jpg", "jpeg", "pdf", "csv", "xlsx"])
     data_type_options = ocr_data_type_options(locale)
     selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()))
     selected_data_type = data_type_options[selected_data_type_label]
 
-    image_bytes = b""
-    if uploaded_image:
-        image_bytes = uploaded_image.getvalue()
-        st.markdown(t(locale, "ocr.preview"))
-        st.image(image_bytes, use_container_width=True)
+    file_bytes = b""
+    if uploaded_file:
+        file_bytes = uploaded_file.getvalue()
+        st.info(t(locale, "ocr.demo_file_received"))
+        file_info_df = pd.DataFrame(
+            [
+                {
+                    "file_name": uploaded_file.name,
+                    "file_size": len(file_bytes),
+                    "file_type": uploaded_file.type or Path(uploaded_file.name).suffix.lower().lstrip("."),
+                }
+            ]
+        )
+        st.dataframe(localize_columns(file_info_df, locale), use_container_width=True, hide_index=True)
+        suffix = Path(uploaded_file.name).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg"}:
+            st.markdown(t(locale, "ocr.preview"))
+            st.image(file_bytes, use_container_width=True)
+        else:
+            st.info(t(locale, "ocr.non_image_received"))
 
-    if st.button(t(locale, "ocr.start_extract"), disabled=not bool(image_bytes)):
-        extraction = extract_text_from_image(image_bytes)
+    if st.button(t(locale, "ocr.start_extract"), disabled=not bool(file_bytes)):
+        extraction = extract_text_from_image(file_bytes)
         if not os.environ.get("GEMINI_API_KEY"):
             st.info(t(locale, "ocr.no_api_key"))
         if not extraction["ok"]:
@@ -1040,6 +1095,16 @@ def today_schedule_page(user, locale: str) -> None:
         hide_index=True,
     )
     st.info(t(locale, schedule_recommendation_key(customers)))
+    pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
+    st.subheader(t(locale, "schedule.pending_followups"))
+    if pending_followups_df.empty:
+        st.info(t(locale, "schedule.no_pending_followups"))
+    else:
+        st.dataframe(
+            localize_columns(pending_followups_df, locale),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 def ai_training_page(user, locale: str) -> None:
@@ -1164,7 +1229,8 @@ def main() -> None:
     st.set_page_config(page_title=t(locale, "app.page_title"), layout="wide")
     repo = get_repo()
     st.title(t(locale, "app.title"))
-    st.caption(t(locale, "app.caption"))
+    if developer_mode_enabled():
+        st.caption(t(locale, "app.caption"))
     with st.sidebar:
         selected_locale = st.selectbox(
             t(locale, "language.label"),

@@ -10,6 +10,7 @@ from apps.streamlit_group_training.app import (
     normalize_customer_import_dataframe,
     request_password_reset,
     signup_user,
+    visible_followups_to_dataframe,
 )
 from verticals.group_training.models import Customer, CustomerStage, User, UserRole
 from verticals.group_training.services.auth_service import verify_password
@@ -113,6 +114,8 @@ def test_login_page_does_not_show_database_path():
     assert "SQLite 資料庫" not in visible_text
     assert "SQLite database" not in visible_text
     assert "group_training.sqlite3" not in visible_text
+    assert "Phase" not in visible_text
+    assert "MVP" not in visible_text
 
 
 def test_normalize_customer_import_dataframe_supports_english_headers():
@@ -123,3 +126,39 @@ def test_normalize_customer_import_dataframe_supports_english_headers():
     assert normalized.iloc[0]["name"] == "Ada"
     assert normalized.iloc[0]["stage"] == "Proposal"
     assert normalized.iloc[0]["next_meeting_date"] == date.today()
+
+
+def test_upload_data_page_ui_does_not_crash_after_login():
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=10)
+    at.text_input[0].set_value("admin@buildway.demo")
+    at.text_input[1].set_value("Admin123!")
+    at.button[0].click()
+    at.run(timeout=10)
+
+    at.radio[0].set_value("上載資料")
+    at.run(timeout=10)
+
+    assert at.subheader[0].value == "上載資料"
+    assert at.file_uploader[0].label == "上載圖片或文件"
+    assert any(selectbox.label == "資料類型" for selectbox in at.selectbox)
+
+
+def test_followup_visible_in_recent_records_for_agent_and_manager(tmp_path):
+    repo = SQLiteGroupTrainingRepository(tmp_path / "followups.sqlite3")
+    customer_service = __import__(
+        "verticals.group_training.services.customer_service",
+        fromlist=["CustomerService"],
+    ).CustomerService(repo)
+    agent_customer = customer_service.create_customer(TENANT_ID, DEFAULT_TEAM_ID, "agt_001", "Agent Customer", "Warm")
+    other_customer = customer_service.create_customer(TENANT_ID, DEFAULT_TEAM_ID, "agt_002", "Other Customer", "Warm")
+    customer_service.add_followup(TENANT_ID, agent_customer.id, "agt_001", "Agent note", "Call tomorrow")
+    customer_service.add_followup(TENANT_ID, other_customer.id, "agt_002", "Other note", "Send proposal")
+
+    agent = repo.get_user(TENANT_ID, "agt_001")
+    manager = repo.get_user(TENANT_ID, "mgr_001")
+    agent_df = visible_followups_to_dataframe(repo, agent, "en")
+    manager_df = visible_followups_to_dataframe(repo, manager, "en")
+
+    assert set(agent_df["customer"]) == {"Agent Customer"}
+    assert set(manager_df["customer"]) >= {"Agent Customer", "Other Customer"}

@@ -270,32 +270,78 @@ class SQLiteGroupTrainingRepository:
 
     def add_daily_log(self, log: DailyActivityLog) -> DailyActivityLog:
         with self._connect() as conn:
-            conn.execute(
+            existing = conn.execute(
                 """
-                INSERT INTO daily_activity_logs
-                (id, tenant_id, team_id, agent_id, activity_date, call_count, whatsapp_count,
-                 appointment_count, meeting_count, closing_count, notes, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT id FROM daily_activity_logs
+                WHERE tenant_id = ? AND agent_id = ? AND activity_date = ?
+                ORDER BY created_at DESC
+                LIMIT 1
                 """,
-                (
-                    log.id,
-                    log.tenant_id,
-                    log.team_id,
-                    log.agent_id,
-                    _date_to_text(log.activity_date),
-                    log.call_count,
-                    log.whatsapp_count,
-                    log.appointment_count,
-                    log.meeting_count,
-                    log.closing_count,
-                    log.notes,
-                    _datetime_to_text(log.created_at),
-                ),
-            )
+                (log.tenant_id, log.agent_id, _date_to_text(log.activity_date)),
+            ).fetchone()
+            duplicate_ids = conn.execute(
+                """
+                SELECT id FROM daily_activity_logs
+                WHERE tenant_id = ? AND agent_id = ? AND activity_date = ?
+                ORDER BY created_at DESC
+                """,
+                (log.tenant_id, log.agent_id, _date_to_text(log.activity_date)),
+            ).fetchall()
+            if existing:
+                log.id = existing["id"]
+                conn.execute(
+                    """
+                    UPDATE daily_activity_logs
+                    SET team_id = ?, call_count = ?, whatsapp_count = ?, appointment_count = ?,
+                        meeting_count = ?, closing_count = ?, notes = ?, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        log.team_id,
+                        log.call_count,
+                        log.whatsapp_count,
+                        log.appointment_count,
+                        log.meeting_count,
+                        log.closing_count,
+                        log.notes,
+                        _datetime_to_text(log.created_at),
+                        log.id,
+                    ),
+                )
+                stale_ids = [row["id"] for row in duplicate_ids if row["id"] != log.id]
+                if stale_ids:
+                    conn.executemany("DELETE FROM daily_activity_logs WHERE id = ?", [(row_id,) for row_id in stale_ids])
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO daily_activity_logs
+                    (id, tenant_id, team_id, agent_id, activity_date, call_count, whatsapp_count,
+                     appointment_count, meeting_count, closing_count, notes, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        log.id,
+                        log.tenant_id,
+                        log.team_id,
+                        log.agent_id,
+                        _date_to_text(log.activity_date),
+                        log.call_count,
+                        log.whatsapp_count,
+                        log.appointment_count,
+                        log.meeting_count,
+                        log.closing_count,
+                        log.notes,
+                        _datetime_to_text(log.created_at),
+                    ),
+                )
         return log
 
     def add_review(self, review: AITrainingReview) -> AITrainingReview:
         with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM ai_training_reviews WHERE tenant_id = ? AND agent_id = ? AND review_date = ?",
+                (review.tenant_id, review.agent_id, _date_to_text(review.review_date)),
+            )
             conn.execute(
                 """
                 INSERT INTO ai_training_reviews
@@ -320,6 +366,10 @@ class SQLiteGroupTrainingRepository:
 
     def add_closing_score(self, score: ClosingScore) -> ClosingScore:
         with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM closing_scores WHERE tenant_id = ? AND agent_id = ? AND score_date = ?",
+                (score.tenant_id, score.agent_id, _date_to_text(score.score_date)),
+            )
             conn.execute(
                 """
                 INSERT INTO closing_scores
@@ -434,7 +484,11 @@ class SQLiteGroupTrainingRepository:
         sql += " ORDER BY activity_date DESC, created_at DESC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._row_to_log(row) for row in rows]
+        logs = [self._row_to_log(row) for row in rows]
+        latest: dict[tuple[str, date], DailyActivityLog] = {}
+        for log in logs:
+            latest.setdefault((log.agent_id, log.activity_date), log)
+        return list(latest.values())
 
     def list_reviews(self, tenant_id: str, agent_id: str | None = None) -> list[AITrainingReview]:
         sql = "SELECT * FROM ai_training_reviews WHERE tenant_id = ?"
@@ -445,7 +499,11 @@ class SQLiteGroupTrainingRepository:
         sql += " ORDER BY created_at DESC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._row_to_review(row) for row in rows]
+        reviews = [self._row_to_review(row) for row in rows]
+        latest: dict[tuple[str, date], AITrainingReview] = {}
+        for review in reviews:
+            latest.setdefault((review.agent_id, review.review_date), review)
+        return list(latest.values())
 
     def list_closing_scores(self, tenant_id: str, agent_id: str | None = None) -> list[ClosingScore]:
         sql = "SELECT * FROM closing_scores WHERE tenant_id = ?"
@@ -456,7 +514,11 @@ class SQLiteGroupTrainingRepository:
         sql += " ORDER BY created_at DESC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._row_to_score(row) for row in rows]
+        scores = [self._row_to_score(row) for row in rows]
+        latest: dict[tuple[str, date], ClosingScore] = {}
+        for score in scores:
+            latest.setdefault((score.agent_id, score.score_date), score)
+        return list(latest.values())
 
     def _row_to_user(self, row: sqlite3.Row) -> User:
         return User(

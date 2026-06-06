@@ -43,14 +43,36 @@ class GroupTrainingRepository:
         return followup
 
     def add_daily_log(self, log: DailyActivityLog) -> DailyActivityLog:
+        for existing in self.daily_logs.values():
+            if (
+                existing.tenant_id == log.tenant_id
+                and existing.agent_id == log.agent_id
+                and existing.activity_date == log.activity_date
+            ):
+                log.id = existing.id
+                break
         self.daily_logs[log.id] = log
         return log
 
     def add_review(self, review: AITrainingReview) -> AITrainingReview:
+        for review_id, existing in list(self.reviews.items()):
+            if (
+                existing.tenant_id == review.tenant_id
+                and existing.agent_id == review.agent_id
+                and existing.review_date == review.review_date
+            ):
+                del self.reviews[review_id]
         self.reviews[review.id] = review
         return review
 
     def add_closing_score(self, score: ClosingScore) -> ClosingScore:
+        for score_id, existing in list(self.closing_scores.items()):
+            if (
+                existing.tenant_id == score.tenant_id
+                and existing.agent_id == score.agent_id
+                and existing.score_date == score.score_date
+            ):
+                del self.closing_scores[score_id]
         self.closing_scores[score.id] = score
         return score
 
@@ -114,19 +136,31 @@ class GroupTrainingRepository:
             rows = [l for l in rows if l.agent_id == agent_id]
         if team_id:
             rows = [l for l in rows if l.team_id == team_id]
-        return sorted(rows, key=lambda l: (l.activity_date, l.created_at), reverse=True)
+        sorted_rows = sorted(rows, key=lambda l: (l.activity_date, l.created_at), reverse=True)
+        latest: dict[tuple[str, date], DailyActivityLog] = {}
+        for row in sorted_rows:
+            latest.setdefault((row.agent_id, row.activity_date), row)
+        return list(latest.values())
 
     def list_reviews(self, tenant_id: str, agent_id: str | None = None) -> list[AITrainingReview]:
         rows = [r for r in self.reviews.values() if r.tenant_id == tenant_id]
         if agent_id:
             rows = [r for r in rows if r.agent_id == agent_id]
-        return sorted(rows, key=lambda r: r.created_at, reverse=True)
+        sorted_rows = sorted(rows, key=lambda r: r.created_at, reverse=True)
+        latest: dict[tuple[str, date], AITrainingReview] = {}
+        for row in sorted_rows:
+            latest.setdefault((row.agent_id, row.review_date), row)
+        return list(latest.values())
 
     def list_closing_scores(self, tenant_id: str, agent_id: str | None = None) -> list[ClosingScore]:
         rows = [s for s in self.closing_scores.values() if s.tenant_id == tenant_id]
         if agent_id:
             rows = [s for s in rows if s.agent_id == agent_id]
-        return sorted(rows, key=lambda s: s.created_at, reverse=True)
+        sorted_rows = sorted(rows, key=lambda s: s.created_at, reverse=True)
+        latest: dict[tuple[str, date], ClosingScore] = {}
+        for row in sorted_rows:
+            latest.setdefault((row.agent_id, row.score_date), row)
+        return list(latest.values())
 
 
 def build_in_memory_repository() -> GroupTrainingRepository:

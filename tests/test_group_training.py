@@ -1,6 +1,8 @@
 from datetime import date
 
 from verticals.group_training.models import CustomerStage, UserRole
+from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score
+from verticals.group_training.agents.training_agent import review_daily_performance
 from verticals.group_training.services.auth_service import AuthService
 from verticals.group_training.services.customer_service import CustomerService
 from verticals.group_training.services.daily_log_service import DailyLogService
@@ -104,6 +106,42 @@ def test_sqlite_daily_log_persists_after_repository_refresh(tmp_path):
     assert len(logs) == 1
     assert logs[0].call_count == 7
     assert logs[0].whatsapp_count == 5
+
+
+def test_daily_log_upsert_replaces_same_agent_same_date(tmp_path):
+    repo = SQLiteGroupTrainingRepository(tmp_path / "upsert.sqlite3")
+    log_service = DailyLogService(repo)
+    log_date = date.today()
+
+    first = log_service.create_log("tenant_buildway_demo", "team_alpha", "agt_001", log_date, 1, 1, 0, 0, 0, "old")
+    second = log_service.create_log("tenant_buildway_demo", "team_alpha", "agt_001", log_date, 9, 8, 1, 1, 1, "latest")
+
+    logs = repo.list_logs("tenant_buildway_demo", activity_date=log_date, agent_id="agt_001")
+    assert first.id == second.id
+    assert len(logs) == 1
+    assert logs[0].call_count == 9
+    assert logs[0].notes == "latest"
+
+
+def test_daily_review_and_hidden_score_keep_latest_same_day(tmp_path):
+    repo = SQLiteGroupTrainingRepository(tmp_path / "review_score_latest.sqlite3")
+    log_service = DailyLogService(repo)
+    log_date = date.today()
+    first = log_service.create_log("tenant_buildway_demo", "team_alpha", "agt_001", log_date, 1, 1, 0, 0, 0, "old")
+    repo.add_review(review_daily_performance(first))
+    repo.add_closing_score(calculate_hidden_closing_score(first))
+    latest = log_service.create_log("tenant_buildway_demo", "team_alpha", "agt_001", log_date, 20, 10, 3, 2, 1, "latest")
+    repo.add_review(review_daily_performance(latest))
+    repo.add_closing_score(calculate_hidden_closing_score(latest))
+
+    reviews = repo.list_reviews("tenant_buildway_demo", agent_id="agt_001")
+    scores = repo.list_closing_scores("tenant_buildway_demo", agent_id="agt_001")
+    dashboard = DashboardService(repo).manager_dashboard("tenant_buildway_demo", "mgr_001", UserRole.MANAGER)
+
+    assert len(reviews) == 1
+    assert len(scores) == 1
+    assert scores[0].hidden_score > 0
+    assert len([log for log in dashboard["daily_logs"] if log.agent_id == "agt_001" and log.activity_date == log_date]) == 1
 
 
 def test_sqlite_password_login_for_default_roles(tmp_path):
