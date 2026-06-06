@@ -27,7 +27,9 @@ from apps.streamlit_group_training.services.ocr_service import (
 from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score
 from verticals.group_training.agents.training_agent import review_daily_performance
 from verticals.group_training.models import CustomerStage, UserRole
+from verticals.group_training.models import User, new_id
 from verticals.group_training.services.auth_service import AuthService
+from verticals.group_training.services.auth_service import hash_password
 from verticals.group_training.services.customer_service import CustomerService
 from verticals.group_training.services.daily_log_service import DailyLogService
 from verticals.group_training.services.dashboard_service import DashboardService
@@ -87,6 +89,149 @@ def parse_iso_date_or_today(value: str) -> date:
 
 def combine_notes(*parts: str) -> str:
     return "\n".join(part.strip() for part in parts if part and part.strip())
+
+
+def developer_mode_enabled() -> bool:
+    return os.environ.get("BUILDWAY_GROUP_TRAINING_DEVELOPER_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def role_from_signup_value(value: str) -> UserRole:
+    normalized = value.strip().lower()
+    if normalized == UserRole.MANAGER.value.lower():
+        return UserRole.MANAGER
+    return UserRole.AGENT
+
+
+def signup_user(
+    repo: SQLiteGroupTrainingRepository,
+    name: str,
+    email: str,
+    password: str,
+    confirm_password: str,
+    role_value: str,
+) -> tuple[bool, str]:
+    if not name.strip():
+        return False, "auth.signup_name_required"
+    if not email.strip():
+        return False, "auth.signup_email_required"
+    if password != confirm_password:
+        return False, "auth.signup_password_mismatch"
+    if repo.find_user_by_email(TENANT_ID, email):
+        return False, "auth.signup_email_exists"
+    role = role_from_signup_value(role_value)
+    repo.add_user(
+        User(
+            TENANT_ID,
+            new_id("user"),
+            name.strip(),
+            email.strip().lower(),
+            role,
+            DEFAULT_TEAM_ID,
+            "mgr_001" if role == UserRole.AGENT else None,
+            hash_password(password),
+        )
+    )
+    return True, "auth.signup_success"
+
+
+def request_password_reset(repo: SQLiteGroupTrainingRepository, email: str) -> str:
+    if email.strip():
+        repo.find_user_by_email(TENANT_ID, email)
+    return "auth.reset_request_created"
+
+
+CSV_IMPORT_COLUMN_ALIASES = {
+    "name": "name",
+    "姓名": "name",
+    "phone": "phone",
+    "電話": "phone",
+    "stage": "stage",
+    "客戶階段": "stage",
+    "next_meeting_date": "next_meeting_date",
+    "下次會議日期": "next_meeting_date",
+    "notes": "notes",
+    "備註": "notes",
+}
+
+
+def normalize_import_stage(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    stage_map = {
+        "cold": "Cold",
+        "冷": "Cold",
+        "warm": "Warm",
+        "暖": "Warm",
+        "hot": "Hot",
+        "熱": "Hot",
+        "proposal": "Proposal",
+        "方案": "Proposal",
+        "closed": "Closed",
+        "已成交": "Closed",
+        "lost": "Lost",
+        "已流失": "Lost",
+    }
+    return stage_map.get(normalized, CustomerStage.COLD.value)
+
+
+def parse_import_date(value: str) -> date:
+    try:
+        return date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return date.today()
+
+
+def normalize_customer_import_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
+    renamed = dataframe.rename(columns={column: CSV_IMPORT_COLUMN_ALIASES.get(str(column).strip(), column) for column in dataframe.columns})
+    rows = []
+    for _, row in renamed.iterrows():
+        raw_name = row.get("name", "")
+        name = "" if pd.isna(raw_name) else str(raw_name).strip()
+        if not name:
+            continue
+        raw_phone = row.get("phone", "")
+        raw_stage = row.get("stage", "")
+        raw_next_meeting_date = row.get("next_meeting_date", "")
+        raw_notes = row.get("notes", "")
+        rows.append(
+            {
+                "name": name,
+                "phone": "" if pd.isna(raw_phone) else str(raw_phone).strip(),
+                "stage": normalize_import_stage("" if pd.isna(raw_stage) else str(raw_stage)),
+                "next_meeting_date": parse_import_date("" if pd.isna(raw_next_meeting_date) else str(raw_next_meeting_date)),
+                "notes": "" if pd.isna(raw_notes) else str(raw_notes).strip(),
+            }
+        )
+    return pd.DataFrame(rows, columns=["name", "phone", "stage", "next_meeting_date", "notes"])
+
+
+def import_customers_from_dataframe(
+    repo: SQLiteGroupTrainingRepository,
+    user,
+    dataframe: pd.DataFrame,
+    target_agent_id: str | None = None,
+) -> int:
+    normalized = normalize_customer_import_dataframe(dataframe)
+    agents = visible_agents(repo, user)
+    if user.role == UserRole.AGENT:
+        target_agent = user
+    else:
+        agent_lookup = {agent.id: agent for agent in agents}
+        target_agent = agent_lookup.get(target_agent_id or "")
+        if target_agent is None:
+            target_agent = agents[0] if agents else user
+    service = CustomerService(repo)
+    for _, row in normalized.iterrows():
+        service.create_customer(
+            TENANT_ID,
+            target_agent.team_id or DEFAULT_TEAM_ID,
+            target_agent.id,
+            row["name"],
+            row["stage"],
+            row["phone"],
+            row["notes"],
+            row["next_meeting_date"],
+        )
+    return len(normalized)
 
 
 def localize_columns(dataframe: pd.DataFrame, locale: str) -> pd.DataFrame:
@@ -430,17 +575,54 @@ def login_panel(repo: SQLiteGroupTrainingRepository, locale: str):
                     st.rerun()
             return user
 
-    st.subheader(t(locale, "auth.login_title"))
-    with st.form("login_form"):
-        email = st.text_input(t(locale, "auth.email"))
-        password = st.text_input(t(locale, "auth.password"), type="password")
-        submit = st.form_submit_button(t(locale, "auth.login_button"))
-    if submit:
-        user = AuthService(repo).authenticate(TENANT_ID, email, password)
-        if user:
-            st.session_state["gt_user_id"] = user.id
-            st.rerun()
-        st.error(t(locale, "auth.invalid_login"))
+    login_tab, signup_tab, reset_tab = st.tabs(
+        [t(locale, "auth.login_title"), t(locale, "auth.signup_title"), t(locale, "auth.forgot_password")]
+    )
+    with login_tab:
+        st.subheader(t(locale, "auth.login_title"))
+        with st.form("login_form"):
+            email = st.text_input(t(locale, "auth.email"))
+            password = st.text_input(t(locale, "auth.password"), type="password")
+            submit = st.form_submit_button(t(locale, "auth.login_button"))
+        if submit:
+            user = AuthService(repo).authenticate(TENANT_ID, email, password)
+            if user:
+                st.session_state["gt_user_id"] = user.id
+                st.rerun()
+            st.error(t(locale, "auth.invalid_login"))
+    with signup_tab:
+        st.subheader(t(locale, "auth.signup_title"))
+        role_options = {
+            t(locale, "role.Agent"): UserRole.AGENT.value,
+            t(locale, "role.Manager"): UserRole.MANAGER.value,
+        }
+        with st.form("signup_form"):
+            name = st.text_input(t(locale, "auth.signup_name"))
+            signup_email = st.text_input(t(locale, "auth.email"), key="signup_email")
+            signup_password = st.text_input(t(locale, "auth.password"), type="password", key="signup_password")
+            confirm_password = st.text_input(t(locale, "auth.confirm_password"), type="password")
+            selected_role_label = st.selectbox(t(locale, "auth.signup_role"), list(role_options.keys()))
+            signup_submit = st.form_submit_button(t(locale, "auth.signup_submit"))
+        if signup_submit:
+            ok, message_key = signup_user(
+                repo,
+                name,
+                signup_email,
+                signup_password,
+                confirm_password,
+                role_options[selected_role_label],
+            )
+            if ok:
+                st.success(t(locale, message_key))
+            else:
+                st.error(t(locale, message_key))
+    with reset_tab:
+        st.subheader(t(locale, "auth.forgot_password"))
+        with st.form("password_reset_form"):
+            reset_email = st.text_input(t(locale, "auth.email"), key="reset_email")
+            reset_submit = st.form_submit_button(t(locale, "auth.reset_submit"))
+        if reset_submit:
+            st.info(t(locale, request_password_reset(repo, reset_email)))
     return None
 
 
@@ -478,6 +660,51 @@ def customer_page(user, locale: str) -> None:
         "customers_csv",
         locale,
     )
+    with st.expander(t(locale, "customer.import_csv")):
+        import_agents = visible_agents(repo, user)
+        target_agent_id = user.id
+        if user.role != UserRole.AGENT and import_agents:
+            agent_options = {f"{agent.name} ({agent.email})": agent.id for agent in import_agents}
+            selected_agent_label = st.selectbox(t(locale, "customer.import_agent"), list(agent_options.keys()))
+            target_agent_id = agent_options[selected_agent_label]
+        uploaded_csv = st.file_uploader(t(locale, "customer.upload_csv"), type=["csv"], key="customer_csv_import")
+        if uploaded_csv:
+            try:
+                csv_dataframe = pd.read_csv(uploaded_csv)
+                preview_dataframe = normalize_customer_import_dataframe(csv_dataframe)
+                st.session_state["customer_csv_import_preview"] = preview_dataframe
+                st.session_state["customer_csv_import_agent_id"] = target_agent_id
+                st.markdown(t(locale, "customer.import_preview"))
+                st.dataframe(
+                    localize_columns(
+                        preview_dataframe.assign(next_meeting_date=preview_dataframe["next_meeting_date"].astype(str)),
+                        locale,
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if preview_dataframe.empty:
+                    st.warning(t(locale, "customer.import_no_valid_rows"))
+            except Exception as exc:
+                st.error(t(locale, "customer.import_failed", error=str(exc)))
+        preview_dataframe = st.session_state.get("customer_csv_import_preview")
+        if preview_dataframe is not None:
+            confirm_col, cancel_col = st.columns(2)
+            if confirm_col.button(t(locale, "customer.confirm_import"), disabled=preview_dataframe.empty):
+                imported_count = import_customers_from_dataframe(
+                    repo,
+                    user,
+                    preview_dataframe,
+                    st.session_state.get("customer_csv_import_agent_id"),
+                )
+                st.session_state.pop("customer_csv_import_preview", None)
+                st.session_state.pop("customer_csv_import_agent_id", None)
+                st.success(t(locale, "customer.import_success", count=imported_count))
+                st.rerun()
+            if cancel_col.button(t(locale, "customer.cancel_import")):
+                st.session_state.pop("customer_csv_import_preview", None)
+                st.session_state.pop("customer_csv_import_agent_id", None)
+                st.rerun()
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
     st.dataframe(
         localize_columns(customers_df.drop(columns=["id", "created_at"]), locale),
@@ -949,7 +1176,8 @@ def main() -> None:
 
     user = login_panel(repo, locale)
     if user is None:
-        st.caption(t(locale, "system.sqlite_database", path=default_sqlite_path()))
+        if developer_mode_enabled():
+            st.caption(t(locale, "system.sqlite_database", path=default_sqlite_path()))
         return
 
     st.sidebar.caption(t(locale, "sidebar.tenant_id", tenant_id=TENANT_ID))
