@@ -31,6 +31,14 @@ from apps.streamlit_group_training.services.demo_dataset_service import (
     seed_demo_dataset,
 )
 from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score
+from verticals.group_training.agents.closing_agent import hidden_score_risk_level
+from verticals.group_training.agents.coaching_agent import build_coaching_plan
+from verticals.group_training.agents.customer_opportunity_agent import (
+    analyze_customer_opportunity,
+    rank_customer_opportunities,
+)
+from verticals.group_training.agents.manager_insight_agent import build_manager_insight
+from verticals.group_training.agents.sales_performance_agent import analyze_sales_performance
 from verticals.group_training.agents.training_agent import review_daily_performance
 from verticals.group_training.models import CustomerStage, UserRole
 from verticals.group_training.models import User, new_id
@@ -48,7 +56,21 @@ from verticals.group_training.services.sqlite_repository import (
 
 
 TENANT_ID = DEFAULT_TENANT_ID
-RAW_I18N_PREFIXES = ("nav.", "schedule.", "training.", "dashboard.", "risk.", "scoring_basis.", "scoring.", "ocr.", "demo.")
+RAW_I18N_PREFIXES = (
+    "nav.",
+    "schedule.",
+    "training.",
+    "dashboard.",
+    "risk.",
+    "scoring_basis.",
+    "scoring.",
+    "ocr.",
+    "demo.",
+    "opportunity.",
+    "sales.",
+    "coaching.",
+    "manager_insight.",
+)
 
 
 def t(locale: str, key: str, **kwargs) -> str:
@@ -418,11 +440,26 @@ def filter_by_date_range(rows, attr_name: str, range_key: str, today: date | Non
 
 
 def hidden_score_band(score: int | float) -> str:
-    if score >= 75:
+    return hidden_score_risk_level(score).lower()
+
+
+def hidden_score_risk_key(score: float) -> str:
+    risk_level = hidden_score_risk_level(score)
+    if risk_level == "Low":
         return "low"
-    if score >= 50:
+    if risk_level == "Medium":
         return "medium"
-    return "high"
+    if risk_level == "High":
+        return "high"
+    return "critical"
+
+
+def hidden_score_risk_i18n_key(score: float) -> str:
+    return f"hidden_score.risk_{hidden_score_risk_key(score)}"
+
+
+def opportunity_priority_key(priority: str) -> str:
+    return f"opportunity.priority.{priority.lower()}"
 
 
 def customer_priority_band(customer) -> str:
@@ -507,20 +544,12 @@ def stage_chart(customers, locale: str) -> alt.Chart:
     )
 
 
-def hidden_score_risk_key(score: float) -> str:
-    if score >= 75:
-        return "hidden_score.risk_low"
-    if score >= 50:
-        return "hidden_score.risk_medium"
-    return "hidden_score.risk_high"
-
-
 def hidden_score_summary(scores_df: pd.DataFrame, locale: str) -> pd.DataFrame:
     if scores_df.empty:
         return pd.DataFrame(columns=["agent_id", "average_hidden_score", "risk_hint"])
     summary_df = scores_df.groupby("agent_id", as_index=False)["hidden_score"].mean()
     summary_df["average_hidden_score"] = summary_df["hidden_score"].round(1)
-    summary_df["risk_hint"] = summary_df["average_hidden_score"].apply(lambda score: t(locale, hidden_score_risk_key(score)))
+    summary_df["risk_hint"] = summary_df["average_hidden_score"].apply(lambda score: t(locale, hidden_score_risk_i18n_key(score)))
     return summary_df[["agent_id", "average_hidden_score", "risk_hint"]]
 
 
@@ -544,8 +573,9 @@ def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart
                         t(locale, "hidden_score.risk_low"),
                         t(locale, "hidden_score.risk_medium"),
                         t(locale, "hidden_score.risk_high"),
+                        t(locale, "hidden_score.risk_critical"),
                     ],
-                    range=["#16a34a", "#f59e0b", "#dc2626"],
+                    range=["#16a34a", "#f59e0b", "#dc2626", "#7f1d1d"],
                 ),
                 legend=alt.Legend(orient="bottom"),
             ),
@@ -559,7 +589,25 @@ def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart
     )
 
 
-def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepository | None = None) -> pd.DataFrame:
+def build_customer_opportunity_map(repo: SQLiteGroupTrainingRepository, customers) -> dict[str, object]:
+    all_followups = repo.list_followups(TENANT_ID)
+    all_logs = repo.list_logs(TENANT_ID)
+    return {
+        customer.id: analyze_customer_opportunity(
+            customer,
+            [followup for followup in all_followups if followup.customer_id == customer.id],
+            [log for log in all_logs if log.agent_id == customer.agent_id],
+        )
+        for customer in customers
+    }
+
+
+def customers_to_dataframe(
+    customers,
+    locale: str,
+    repo: SQLiteGroupTrainingRepository | None = None,
+    opportunity_map: dict[str, object] | None = None,
+) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
@@ -570,8 +618,12 @@ def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepo
                 "phone": c.phone,
                 "next_meeting_date": c.next_meeting_date.isoformat() if c.next_meeting_date else "",
                 "today_meeting": yes_no(locale, c.next_meeting_date == date.today()),
-                "priority": t(locale, schedule_priority_key(c.stage)),
-                "followup_recommendation": customer_followup_recommendation(c, locale),
+                "opportunity_score": opportunity_map[c.id].opportunity_score if opportunity_map and c.id in opportunity_map else "",
+                "priority": t(locale, opportunity_priority_key(opportunity_map[c.id].priority)) if opportunity_map and c.id in opportunity_map else t(locale, schedule_priority_key(c.stage)),
+                "opportunity_reason": t(locale, opportunity_map[c.id].reason_key) if opportunity_map and c.id in opportunity_map else "",
+                "next_best_action": t(locale, opportunity_map[c.id].next_best_action_key) if opportunity_map and c.id in opportunity_map else customer_followup_recommendation(c, locale),
+                "suggested_message": t(locale, opportunity_map[c.id].suggested_message_key) if opportunity_map and c.id in opportunity_map else "",
+                "followup_deadline": opportunity_map[c.id].followup_deadline.isoformat() if opportunity_map and c.id in opportunity_map else "",
                 "notes": c.notes,
                 "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
             }
@@ -585,16 +637,29 @@ def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepo
             "phone",
             "next_meeting_date",
             "today_meeting",
+            "opportunity_score",
             "priority",
-            "followup_recommendation",
+            "opportunity_reason",
+            "next_best_action",
+            "suggested_message",
+            "followup_deadline",
             "notes",
             "created_at",
         ],
     )
 
 
-def today_schedule_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepository | None = None) -> pd.DataFrame:
-    sorted_customers = sorted(customers, key=lambda customer: schedule_sort_rank(customer.stage))
+def today_schedule_to_dataframe(
+    customers,
+    locale: str,
+    repo: SQLiteGroupTrainingRepository | None = None,
+    opportunity_map: dict[str, object] | None = None,
+) -> pd.DataFrame:
+    if opportunity_map:
+        ordered_ids = [analysis.customer_id for analysis in rank_customer_opportunities([opportunity_map[customer.id] for customer in customers])]
+        sorted_customers = sorted(customers, key=lambda customer: ordered_ids.index(customer.id))
+    else:
+        sorted_customers = sorted(customers, key=lambda customer: schedule_sort_rank(customer.stage))
     return pd.DataFrame(
         [
             {
@@ -604,12 +669,29 @@ def today_schedule_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainin
                 "agent_id": agent_display_name(repo, customer.agent_id) if repo else customer.agent_id,
                 "notes": customer.notes,
                 "today_meeting": yes_no(locale, customer.next_meeting_date == date.today()),
-                "priority": t(locale, schedule_priority_key(customer.stage)),
-                "followup_recommendation": customer_followup_recommendation(customer, locale),
+                "opportunity_score": opportunity_map[customer.id].opportunity_score if opportunity_map and customer.id in opportunity_map else "",
+                "priority": t(locale, opportunity_priority_key(opportunity_map[customer.id].priority)) if opportunity_map and customer.id in opportunity_map else t(locale, schedule_priority_key(customer.stage)),
+                "opportunity_reason": t(locale, opportunity_map[customer.id].reason_key) if opportunity_map and customer.id in opportunity_map else "",
+                "contact_method": t(locale, opportunity_map[customer.id].contact_method_key) if opportunity_map and customer.id in opportunity_map else "",
+                "next_best_action": t(locale, opportunity_map[customer.id].next_best_action_key) if opportunity_map and customer.id in opportunity_map else "",
+                "suggested_message": t(locale, opportunity_map[customer.id].suggested_message_key) if opportunity_map and customer.id in opportunity_map else "",
             }
             for customer in sorted_customers
         ],
-        columns=["customer", "phone", "stage", "agent_id", "notes", "today_meeting", "priority", "followup_recommendation"],
+        columns=[
+            "customer",
+            "phone",
+            "stage",
+            "agent_id",
+            "today_meeting",
+            "opportunity_score",
+            "priority",
+            "opportunity_reason",
+            "contact_method",
+            "next_best_action",
+            "suggested_message",
+            "notes",
+        ],
     )
 
 
@@ -676,40 +758,28 @@ def filter_scores(scores, agent_id: str | None = None, risk_band: str = "all"):
 
 
 def build_agent_coaching_plan(logs, reviews, scores) -> dict:
-    total_calls = sum(log.call_count for log in logs)
-    total_whatsapp = sum(log.whatsapp_count for log in logs)
-    total_appointments = sum(log.appointment_count for log in logs)
-    total_meetings = sum(log.meeting_count for log in logs)
-    total_closings = sum(log.closing_count for log in logs)
-    total_outreach = total_calls + total_whatsapp
     latest_score = max(scores, key=lambda score: (score.score_date, score.created_at), default=None)
     latest_review = max(reviews, key=lambda review: (review.review_date, review.created_at), default=None)
-
-    if total_outreach < 20:
-        issue = "activity_gap"
-    elif total_calls >= 30 and total_appointments <= max(1, total_calls // 20):
-        issue = "appointment_conversion"
-    elif total_appointments >= 3 and total_closings == 0:
-        issue = "closing_conversion"
-    else:
-        issue = "balanced_pipeline"
+    performance = analyze_sales_performance(logs)
+    coaching_plan = build_coaching_plan(performance, latest_score.hidden_score if latest_score else None)
 
     return {
-        "issue": issue,
+        "issue": performance.conversion_problem_stage,
         "metrics": {
-            "calls": total_calls,
-            "whatsapp": total_whatsapp,
-            "appointments": total_appointments,
-            "meetings": total_meetings,
-            "closings": total_closings,
+            **performance.metrics,
+            "performance_score": performance.performance_score,
             "latest_hidden_score": latest_score.hidden_score if latest_score else 0,
             "latest_risk": latest_review.risk_level if latest_review else "Low",
         },
-        "issue_key": f"coaching.issue.{issue}",
-        "root_cause_key": f"coaching.root_cause.{issue}",
-        "training_focus_key": f"coaching.training_focus.{issue}",
-        "next_action_key": f"coaching.next_action.{issue}",
-        "manager_note_key": f"coaching.manager_note.{issue}",
+        "issue_key": coaching_plan.coaching_topic_key,
+        "root_cause_key": coaching_plan.reason_key,
+        "training_focus_key": coaching_plan.training_focus_key,
+        "next_action_key": coaching_plan.next_action_key,
+        "manager_note_key": coaching_plan.manager_action_key,
+        "target_metric_key": coaching_plan.target_metric_key,
+        "target_deadline": coaching_plan.target_deadline,
+        "performance": performance,
+        "coaching": coaching_plan,
     }
 
 
@@ -723,6 +793,9 @@ def coaching_plan_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataF
                 "training_focus": t(locale, plan["training_focus_key"]),
                 "next_action": t(locale, plan["next_action_key"]),
                 "manager_note": t(locale, plan["manager_note_key"]),
+                "target_metric": t(locale, plan["target_metric_key"]),
+                "target_deadline": plan["target_deadline"].isoformat(),
+                "performance_score": plan["metrics"]["performance_score"],
                 "hidden_score": plan["metrics"]["latest_hidden_score"],
                 "risk": translated_risk(locale, plan["metrics"]["latest_risk"]),
             }
@@ -735,10 +808,118 @@ def coaching_plan_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataF
             "training_focus",
             "next_action",
             "manager_note",
+            "target_metric",
+            "target_deadline",
+            "performance_score",
             "hidden_score",
             "risk",
         ],
     )
+
+
+def sales_performance_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataFrame:
+    rows = []
+    for plan in agent_plans:
+        performance = plan["performance"]
+        rows.append(
+            {
+                "agent_id": plan["agent_label"],
+                "performance_score": performance.performance_score,
+                "strength": t(locale, performance.strength_key),
+                "weakness": t(locale, performance.weakness_key),
+                "conversion_problem_stage": t(locale, f"sales.stage.{performance.conversion_problem_stage}"),
+                "explanation": t(locale, performance.explanation_key),
+                "appointment_rate": f"{performance.metrics['appointment_rate']:.1f}%",
+                "meeting_rate": f"{performance.metrics['meeting_rate']:.1f}%",
+                "closing_rate": f"{performance.metrics['closing_rate']:.1f}%",
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "agent_id",
+            "performance_score",
+            "strength",
+            "weakness",
+            "conversion_problem_stage",
+            "explanation",
+            "appointment_rate",
+            "meeting_rate",
+            "closing_rate",
+        ],
+    )
+
+
+def customer_opportunities_to_dataframe(customers, opportunity_map: dict[str, object], locale: str, repo=None) -> pd.DataFrame:
+    customer_lookup = {customer.id: customer for customer in customers}
+    rows = []
+    for analysis in rank_customer_opportunities(list(opportunity_map.values())):
+        customer = customer_lookup.get(analysis.customer_id)
+        if not customer:
+            continue
+        rows.append(
+            {
+                "customer": customer.name,
+                "agent_id": agent_display_name(repo, customer.agent_id) if repo else customer.agent_id,
+                "stage": translated_stage(locale, customer.stage.value),
+                "opportunity_score": analysis.opportunity_score,
+                "priority": t(locale, opportunity_priority_key(analysis.priority)),
+                "opportunity_reason": t(locale, analysis.reason_key),
+                "next_best_action": t(locale, analysis.next_best_action_key),
+                "followup_deadline": analysis.followup_deadline.isoformat(),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "customer",
+            "agent_id",
+            "stage",
+            "opportunity_score",
+            "priority",
+            "opportunity_reason",
+            "next_best_action",
+            "followup_deadline",
+        ],
+    )
+
+
+def render_manager_insight_section(
+    repo: SQLiteGroupTrainingRepository,
+    locale: str,
+    agents,
+    customers,
+    logs,
+    scores,
+    plans: list[dict],
+    opportunity_map: dict[str, object],
+) -> None:
+    performances = [plan["performance"] for plan in plans]
+    insight = build_manager_insight(agents, customers, list(opportunity_map.values()), performances, scores)
+    st.subheader(t(locale, "manager_insight.title"))
+    st.info(
+        t(
+            locale,
+            insight.summary_key,
+            affected_agents=insight.affected_agent_count,
+            total_agents=len(agents),
+            problem=t(locale, insight.team_problem_key),
+        )
+    )
+    insight_cols = st.columns(2)
+    insight_cols[0].markdown(t(locale, "manager_insight.main_problem"))
+    insight_cols[0].write(t(locale, insight.team_problem_key))
+    insight_cols[0].markdown(t(locale, "manager_insight.ai_recommendation"))
+    insight_cols[0].write(t(locale, insight.manager_recommendation_key))
+    insight_cols[1].markdown(t(locale, "manager_insight.team_next_action"))
+    insight_cols[1].write(t(locale, insight.team_next_action_key))
+    insight_cols[1].markdown(t(locale, "manager_insight.high_risk_agents"))
+    render_simple_table(risk_agents_to_dataframe(repo, insight.high_risk_agents, locale), locale, insight_cols[1])
+
+    st.markdown(t(locale, "manager_insight.top_customers"))
+    top_customer_ids = {analysis.customer_id for analysis in insight.top_customers}
+    top_customer_map = {customer_id: opportunity_map[customer_id] for customer_id in top_customer_ids if customer_id in opportunity_map}
+    render_simple_table(customer_opportunities_to_dataframe(customers, top_customer_map, locale, repo).head(10), locale)
 
 
 def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agents, logs, reviews, scores) -> list[dict]:
@@ -1026,7 +1207,8 @@ def customer_page(user, locale: str) -> None:
         today_options[selected_today_filter],
         priority_options[selected_priority_filter],
     )
-    customers_df = customers_to_dataframe(filtered_customers, locale, repo)
+    opportunity_map = build_customer_opportunity_map(repo, filtered_customers)
+    customers_df = customers_to_dataframe(filtered_customers, locale, repo, opportunity_map)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
     render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
 
@@ -1471,7 +1653,8 @@ def today_schedule_page(user, locale: str) -> None:
         agent_id=agent_options[selected_agent],
         priority=priority_options[selected_priority],
     )
-    schedule_df = today_schedule_to_dataframe(customers, locale, repo)
+    opportunity_map = build_customer_opportunity_map(repo, customers)
+    schedule_df = today_schedule_to_dataframe(customers, locale, repo, opportunity_map)
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
     render_simple_table(schedule_df, locale)
@@ -1572,6 +1755,11 @@ def ai_training_page(user, locale: str) -> None:
     if review_agent_options[selected_review_agent]:
         logs = [log for log in logs if log.agent_id == review_agent_options[selected_review_agent]]
     logs = filter_by_date_range(logs, "activity_date", date_range_options[selected_review_range])
+    filtered_agents = [agent for agent in report_agents(repo, user) if not review_agent_options[selected_review_agent] or agent.id == review_agent_options[selected_review_agent]]
+    plan_scores = [] if user.role == UserRole.AGENT else repo.list_closing_scores(TENANT_ID)
+    plans = build_visible_agent_coaching_plans(repo, filtered_agents, logs, reviews, plan_scores)
+    st.subheader(t(locale, "sales.performance_analysis"))
+    render_simple_table(sales_performance_to_dataframe(plans, locale), locale)
     log_index = logs_by_agent_and_date(logs)
     render_simple_table(
         pd.DataFrame(
@@ -1604,9 +1792,6 @@ def ai_training_page(user, locale: str) -> None:
     if user.role == UserRole.AGENT:
         st.info(t(locale, "training.hidden_score_agent_info"))
     else:
-        filtered_agents = [agent for agent in report_agents(repo, user) if not review_agent_options[selected_review_agent] or agent.id == review_agent_options[selected_review_agent]]
-        scores = repo.list_closing_scores(TENANT_ID)
-        plans = build_visible_agent_coaching_plans(repo, filtered_agents, logs, reviews, scores)
         st.subheader(t(locale, "coaching.title"))
         render_simple_table(coaching_plan_to_dataframe(plans, locale), locale)
 
@@ -1650,6 +1835,7 @@ def manager_dashboard_page(user, locale: str) -> None:
     )
     score_risk_options = {
         t(locale, "filter.all"): "all",
+        t(locale, "hidden_score.risk_critical"): "critical",
         t(locale, "hidden_score.risk_high"): "high",
         t(locale, "hidden_score.risk_medium"): "medium",
         t(locale, "hidden_score.risk_low"): "low",
@@ -1696,6 +1882,14 @@ def manager_dashboard_page(user, locale: str) -> None:
         dashboard["reviews"],
         dashboard["closing_scores"],
     )
+    opportunity_map = build_customer_opportunity_map(repo, customers)
+    coaching_plans = build_visible_agent_coaching_plans(
+        repo,
+        dashboard["agents"],
+        dashboard["daily_logs"],
+        dashboard["reviews"],
+        dashboard["closing_scores"],
+    )
     st.subheader(t(locale, "dashboard.title"))
     render_scoring_basis(locale)
     c1, c2, c3, c4 = st.columns(4)
@@ -1705,6 +1899,17 @@ def manager_dashboard_page(user, locale: str) -> None:
     c5, c6, c7, c8 = st.columns(4)
     for column, (label_key, value) in zip([c5, c6, c7, c8], metric_rows[4:]):
         column.metric(t(locale, label_key), value)
+
+    render_manager_insight_section(
+        repo,
+        locale,
+        dashboard["agents"],
+        customers,
+        dashboard["daily_logs"],
+        dashboard["closing_scores"],
+        coaching_plans,
+        opportunity_map,
+    )
 
     chart_col_1, chart_col_2 = st.columns(2)
     logs_df = daily_logs_to_dataframe(dashboard["daily_logs"])
@@ -1735,13 +1940,6 @@ def manager_dashboard_page(user, locale: str) -> None:
     team_col.markdown(t(locale, "dashboard.risk_agents"))
     render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
     team_col.markdown(t(locale, "coaching.title"))
-    coaching_plans = build_visible_agent_coaching_plans(
-        repo,
-        dashboard["agents"],
-        dashboard["daily_logs"],
-        dashboard["reviews"],
-        dashboard["closing_scores"],
-    )
     render_simple_table(coaching_plan_to_dataframe(coaching_plans, locale), locale, team_col)
 
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))

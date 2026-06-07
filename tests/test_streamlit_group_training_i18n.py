@@ -24,6 +24,9 @@ RAW_KEY_PREFIXES = (
     "followup.",
     "coaching.",
     "stage_guidance.",
+    "opportunity.",
+    "sales.",
+    "manager_insight.",
 )
 
 

@@ -7,6 +7,16 @@ from datetime import date
 from verticals.group_training.models import ClosingScore, DailyActivityLog
 
 
+def hidden_score_risk_level(hidden_score: int | float) -> str:
+    if hidden_score >= 80:
+        return "Low"
+    if hidden_score >= 60:
+        return "Medium"
+    if hidden_score >= 40:
+        return "High"
+    return "Critical"
+
+
 def calculate_hidden_closing_score(log: DailyActivityLog) -> ClosingScore:
     score = 45
     score += min(log.meeting_count * 8, 24)
@@ -24,4 +34,3 @@ def calculate_hidden_closing_score(log: DailyActivityLog) -> ClosingScore:
         hidden_score=max(0, min(100, score)),
         rationale="Score blends outreach consistency, appointments, meetings, and closings.",
     )
-

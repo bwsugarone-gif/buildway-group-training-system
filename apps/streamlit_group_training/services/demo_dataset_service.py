@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score
+from verticals.group_training.agents.closing_agent import hidden_score_risk_level
 from verticals.group_training.agents.training_agent import review_daily_performance
 from verticals.group_training.models import Customer, CustomerFollowup, CustomerStage, DailyActivityLog, User, UserRole
 from verticals.group_training.services.auth_service import hash_password
@@ -266,6 +267,8 @@ def generate_demo_dashboard_metrics(agents, customers, logs, reviews, scores) ->
     }
     high_risk_agent_ids = {
         review.agent_id for review in _latest_reviews_by_agent(reviews).values() if review.risk_level == "High"
+    } | {
+        score.agent_id for score in latest_scores.values() if hidden_score_risk_level(score.hidden_score) in {"High", "Critical"}
     } | low_active_agent_ids
     top_agents = sorted(
         (
