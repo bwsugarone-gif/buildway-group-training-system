@@ -22,6 +22,65 @@ DEMO_AGENT_COUNT = 20
 DEMO_CUSTOMER_COUNT = 200
 DEMO_LOG_DAYS = 25
 
+DEMO_AGENT_NAMES = [
+    "陳家豪",
+    "林美琪",
+    "黃俊傑",
+    "李嘉欣",
+    "張志強",
+    "梁婉婷",
+    "王浩然",
+    "吳詩雅",
+    "劉偉倫",
+    "蔡佩珊",
+    "何卓軒",
+    "鄭雅雯",
+    "郭子健",
+    "謝凱琳",
+    "周明軒",
+    "羅穎彤",
+    "馮國威",
+    "潘曉彤",
+    "許承恩",
+    "馬嘉儀",
+]
+
+DEMO_CUSTOMER_SURNAMES = [
+    "陳",
+    "林",
+    "黃",
+    "李",
+    "張",
+    "梁",
+    "王",
+    "吳",
+    "劉",
+    "蔡",
+]
+
+DEMO_CUSTOMER_GIVEN_NAMES = [
+    "志明",
+    "美玲",
+    "俊傑",
+    "嘉欣",
+    "家豪",
+    "婉婷",
+    "浩然",
+    "詩雅",
+    "偉倫",
+    "佩珊",
+    "卓軒",
+    "雅雯",
+    "子健",
+    "凱琳",
+    "明軒",
+    "穎彤",
+    "國威",
+    "曉彤",
+    "承恩",
+    "嘉儀",
+]
+
 
 def demo_dataset_allowed(tenant_id: str) -> bool:
     return tenant_id == "tenant_buildway_demo" or os.environ.get("BUILDWAY_GROUP_TRAINING_CLOUD_DEMO", "").lower() in {
@@ -88,7 +147,7 @@ def seed_demo_dataset(repo: Any, tenant_id: str, team_id: str, manager_id: str) 
         agent = User(
             tenant_id=tenant_id,
             id=f"{DEMO_AGENT_PREFIX}{index:03d}",
-            name=f"Demo Agent {index:02d}",
+            name=DEMO_AGENT_NAMES[index - 1],
             email=f"demo.agent{index:02d}@buildway.demo",
             role=UserRole.AGENT,
             team_id=team_id,
@@ -121,7 +180,7 @@ def seed_demo_dataset(repo: Any, tenant_id: str, team_id: str, manager_id: str) 
             tenant_id=tenant_id,
             team_id=team_id,
             agent_id=agent.id,
-            name=f"Demo Customer {index:03d}",
+            name=_customer_name(index),
             stage=stage,
             phone=f"6{index:07d}",
             notes=_customer_note(stage, index),
@@ -260,30 +319,30 @@ def generate_demo_ai_insights(user, agents, customers, logs, reviews, scores) ->
 
 def _customer_note(stage: CustomerStage, index: int) -> str:
     if stage in {CustomerStage.HOT, CustomerStage.PROPOSAL}:
-        return f"High potential case. Needs proposal follow-up #{index}."
+        return f"高潛力保險客戶，已了解保障缺口，建議安排方案比較及成交跟進 #{index}。"
     if stage == CustomerStage.WARM:
-        return f"Warm prospect. Confirm needs and next meeting #{index}."
+        return f"有興趣了解醫療及儲蓄保障，需要確認家庭需要及下次會面時間 #{index}。"
     if stage == CustomerStage.CLOSED:
-        return f"Closed case. Prepare policy service follow-up #{index}."
+        return f"已成交保單，請安排保單服務、保費提醒及轉介紹跟進 #{index}。"
     if stage == CustomerStage.LOST:
-        return f"Lost case. Keep light-touch renewal contact #{index}."
-    return f"Cold lead. Continue qualification #{index}."
+        return f"暫未成交，價格或時機未合適，建議三十日後作輕量關懷 #{index}。"
+    return f"初步名單，尚未確認保障需要，適合以 WhatsApp 關懷及簡短電話篩選 #{index}。"
 
 
 def _followup_note(stage: CustomerStage, index: int) -> str:
     if stage in {CustomerStage.HOT, CustomerStage.PROPOSAL}:
-        return f"Reviewed needs and prepared proposal pack #{index}."
+        return f"已檢視保障需要並準備保險方案建議書 #{index}。"
     if stage == CustomerStage.WARM:
-        return f"Confirmed interest and arranged next discussion #{index}."
-    return f"Completed routine follow-up #{index}."
+        return f"已確認客戶興趣，安排下次需求分析會面 #{index}。"
+    return f"已完成例行關懷，保留後續培育名單 #{index}。"
 
 
 def _next_action(stage: CustomerStage, next_meeting: date | None) -> str:
     if stage in {CustomerStage.HOT, CustomerStage.PROPOSAL}:
-        return f"Prepare closing conversation for {next_meeting.isoformat() if next_meeting else 'next meeting'}"
+        return f"準備 {next_meeting.isoformat() if next_meeting else '下次會面'} 的成交對話及異議處理"
     if stage == CustomerStage.WARM:
-        return f"Confirm appointment for {next_meeting.isoformat() if next_meeting else 'this week'}"
-    return "Keep in monthly nurture list"
+        return f"確認 {next_meeting.isoformat() if next_meeting else '本週'} 的需求分析預約"
+    return "放入每月關懷名單，維持低壓培育"
 
 
 def _activity_counts(agent_index: int, day_offset: int) -> tuple[int, int, int, int, int]:
@@ -304,10 +363,16 @@ def _activity_counts(agent_index: int, day_offset: int) -> tuple[int, int, int, 
 
 def _log_note(agent_index: int, day_offset: int) -> str:
     if agent_index >= 17:
-        return "Low activity day. Needs manager coaching."
+        return "今日活動偏低，需要主管安排 call block 及即日跟進節奏 coaching。"
     if day_offset % 7 == 0:
-        return "Strong pipeline follow-up and proposal preparation."
-    return "Regular prospecting, appointments, and customer follow-up."
+        return "高潛力客戶跟進順利，已準備保障方案及成交對話。"
+    return "完成日常客戶開發、預約安排及保單服務跟進。"
+
+
+def _customer_name(index: int) -> str:
+    surname = DEMO_CUSTOMER_SURNAMES[(index - 1) % len(DEMO_CUSTOMER_SURNAMES)]
+    given_name = DEMO_CUSTOMER_GIVEN_NAMES[(index - 1) % len(DEMO_CUSTOMER_GIVEN_NAMES)]
+    return f"{surname}{given_name}"
 
 
 def _latest_logs_by_agent(logs) -> dict[str, DailyActivityLog]:

@@ -20,6 +20,10 @@ RAW_KEY_PREFIXES = (
     "column.",
     "data.",
     "demo.",
+    "filter.",
+    "followup.",
+    "coaching.",
+    "stage_guidance.",
 )
 
 

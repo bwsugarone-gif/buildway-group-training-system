@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
@@ -380,6 +380,60 @@ def schedule_recommendation_key(customers) -> str:
     return "schedule.recommendation_no_high_priority"
 
 
+def customer_followup_recommendation_key(stage: CustomerStage) -> str:
+    if stage == CustomerStage.HOT:
+        return "followup.recommendation_hot"
+    if stage == CustomerStage.PROPOSAL:
+        return "followup.recommendation_proposal"
+    if stage == CustomerStage.WARM:
+        return "followup.recommendation_warm"
+    if stage == CustomerStage.COLD:
+        return "followup.recommendation_cold"
+    if stage == CustomerStage.CLOSED:
+        return "followup.recommendation_closed"
+    return "followup.recommendation_lost"
+
+
+def customer_followup_recommendation(customer, locale: str) -> str:
+    return t(locale, customer_followup_recommendation_key(customer.stage))
+
+
+def date_range_start(range_key: str, today: date | None = None) -> date | None:
+    today = today or date.today()
+    if range_key == "today":
+        return today
+    if range_key == "last_7_days":
+        return today - timedelta(days=6)
+    if range_key == "last_30_days":
+        return today - timedelta(days=29)
+    return None
+
+
+def filter_by_date_range(rows, attr_name: str, range_key: str, today: date | None = None):
+    start = date_range_start(range_key, today)
+    if not start:
+        return list(rows)
+    today = today or date.today()
+    return [row for row in rows if start <= getattr(row, attr_name) <= today]
+
+
+def hidden_score_band(score: int | float) -> str:
+    if score >= 75:
+        return "low"
+    if score >= 50:
+        return "medium"
+    return "high"
+
+
+def customer_priority_band(customer) -> str:
+    priority_key = schedule_priority_key(customer.stage)
+    if priority_key == "schedule.priority_high":
+        return "high"
+    if priority_key == "schedule.priority_medium":
+        return "medium"
+    return "low"
+
+
 def chart_color_range() -> list[str]:
     return ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#64748b"]
 
@@ -516,6 +570,8 @@ def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepo
                 "phone": c.phone,
                 "next_meeting_date": c.next_meeting_date.isoformat() if c.next_meeting_date else "",
                 "today_meeting": yes_no(locale, c.next_meeting_date == date.today()),
+                "priority": t(locale, schedule_priority_key(c.stage)),
+                "followup_recommendation": customer_followup_recommendation(c, locale),
                 "notes": c.notes,
                 "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
             }
@@ -529,6 +585,8 @@ def customers_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainingRepo
             "phone",
             "next_meeting_date",
             "today_meeting",
+            "priority",
+            "followup_recommendation",
             "notes",
             "created_at",
         ],
@@ -547,18 +605,34 @@ def today_schedule_to_dataframe(customers, locale: str, repo: SQLiteGroupTrainin
                 "notes": customer.notes,
                 "today_meeting": yes_no(locale, customer.next_meeting_date == date.today()),
                 "priority": t(locale, schedule_priority_key(customer.stage)),
+                "followup_recommendation": customer_followup_recommendation(customer, locale),
             }
             for customer in sorted_customers
         ],
-        columns=["customer", "phone", "stage", "agent_id", "notes", "today_meeting", "priority"],
+        columns=["customer", "phone", "stage", "agent_id", "notes", "today_meeting", "priority", "followup_recommendation"],
     )
 
 
-def filter_customers(customers, search_text: str = "", stage: str | None = None):
+def filter_customers(
+    customers,
+    search_text: str = "",
+    stage: str | None = None,
+    agent_id: str | None = None,
+    today_followup: str = "all",
+    priority: str = "all",
+):
     query = search_text.strip().lower()
     filtered = customers
     if stage:
         filtered = [customer for customer in filtered if customer.stage.value == stage]
+    if agent_id:
+        filtered = [customer for customer in filtered if customer.agent_id == agent_id]
+    if today_followup == "today":
+        filtered = [customer for customer in filtered if customer.next_meeting_date == date.today()]
+    elif today_followup == "not_today":
+        filtered = [customer for customer in filtered if customer.next_meeting_date != date.today()]
+    if priority != "all":
+        filtered = [customer for customer in filtered if customer_priority_band(customer) == priority]
     if query:
         filtered = [
             customer
@@ -569,6 +643,123 @@ def filter_customers(customers, search_text: str = "", stage: str | None = None)
             or query in customer.agent_id.lower()
         ]
     return filtered
+
+
+def filter_daily_logs(logs, agent_id: str | None = None, date_range: str = "all", activity_issue: str = "all"):
+    filtered = list(logs)
+    if agent_id:
+        filtered = [log for log in filtered if log.agent_id == agent_id]
+    filtered = filter_by_date_range(filtered, "activity_date", date_range)
+    if activity_issue == "low_activity":
+        filtered = [log for log in filtered if log.call_count + log.whatsapp_count < 10]
+    elif activity_issue == "low_closing":
+        filtered = [log for log in filtered if log.appointment_count >= 2 and log.closing_count == 0]
+    return filtered
+
+
+def filter_reviews(reviews, agent_id: str | None = None, risk_level: str = "all", date_range: str = "all"):
+    filtered = list(reviews)
+    if agent_id:
+        filtered = [review for review in filtered if review.agent_id == agent_id]
+    if risk_level != "all":
+        filtered = [review for review in filtered if review.risk_level == risk_level]
+    return filter_by_date_range(filtered, "review_date", date_range)
+
+
+def filter_scores(scores, agent_id: str | None = None, risk_band: str = "all"):
+    filtered = list(scores)
+    if agent_id:
+        filtered = [score for score in filtered if score.agent_id == agent_id]
+    if risk_band != "all":
+        filtered = [score for score in filtered if hidden_score_band(score.hidden_score) == risk_band]
+    return filtered
+
+
+def build_agent_coaching_plan(logs, reviews, scores) -> dict:
+    total_calls = sum(log.call_count for log in logs)
+    total_whatsapp = sum(log.whatsapp_count for log in logs)
+    total_appointments = sum(log.appointment_count for log in logs)
+    total_meetings = sum(log.meeting_count for log in logs)
+    total_closings = sum(log.closing_count for log in logs)
+    total_outreach = total_calls + total_whatsapp
+    latest_score = max(scores, key=lambda score: (score.score_date, score.created_at), default=None)
+    latest_review = max(reviews, key=lambda review: (review.review_date, review.created_at), default=None)
+
+    if total_outreach < 20:
+        issue = "activity_gap"
+    elif total_calls >= 30 and total_appointments <= max(1, total_calls // 20):
+        issue = "appointment_conversion"
+    elif total_appointments >= 3 and total_closings == 0:
+        issue = "closing_conversion"
+    else:
+        issue = "balanced_pipeline"
+
+    return {
+        "issue": issue,
+        "metrics": {
+            "calls": total_calls,
+            "whatsapp": total_whatsapp,
+            "appointments": total_appointments,
+            "meetings": total_meetings,
+            "closings": total_closings,
+            "latest_hidden_score": latest_score.hidden_score if latest_score else 0,
+            "latest_risk": latest_review.risk_level if latest_review else "Low",
+        },
+        "issue_key": f"coaching.issue.{issue}",
+        "root_cause_key": f"coaching.root_cause.{issue}",
+        "training_focus_key": f"coaching.training_focus.{issue}",
+        "next_action_key": f"coaching.next_action.{issue}",
+        "manager_note_key": f"coaching.manager_note.{issue}",
+    }
+
+
+def coaching_plan_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "agent_id": plan["agent_label"],
+                "coaching_issue": t(locale, plan["issue_key"]),
+                "root_cause": t(locale, plan["root_cause_key"]),
+                "training_focus": t(locale, plan["training_focus_key"]),
+                "next_action": t(locale, plan["next_action_key"]),
+                "manager_note": t(locale, plan["manager_note_key"]),
+                "hidden_score": plan["metrics"]["latest_hidden_score"],
+                "risk": translated_risk(locale, plan["metrics"]["latest_risk"]),
+            }
+            for plan in agent_plans
+        ],
+        columns=[
+            "agent_id",
+            "coaching_issue",
+            "root_cause",
+            "training_focus",
+            "next_action",
+            "manager_note",
+            "hidden_score",
+            "risk",
+        ],
+    )
+
+
+def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agents, logs, reviews, scores) -> list[dict]:
+    plans = []
+    for agent in agents:
+        plan = build_agent_coaching_plan(
+            [log for log in logs if log.agent_id == agent.id],
+            [review for review in reviews if review.agent_id == agent.id],
+            [score for score in scores if score.agent_id == agent.id],
+        )
+        plan["agent_id"] = agent.id
+        plan["agent_label"] = agent_display_name(repo, agent.id)
+        plans.append(plan)
+    return plans
+
+
+def render_customer_stage_guidance(locale: str) -> None:
+    with st.expander(t(locale, "customer.stage_guidance_title")):
+        for stage in CustomerStage:
+            st.markdown(f"**{translated_stage(locale, stage.value)}**")
+            st.caption(t(locale, f"stage_guidance.{stage.value}"))
 
 
 def daily_logs_to_dataframe(logs) -> pd.DataFrame:
@@ -800,7 +991,8 @@ def customer_page(user, locale: str) -> None:
 
     visible_agent_id = user.id if user.role == UserRole.AGENT else None
     customers = service.repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
-    search_col, stage_col = st.columns([2, 1])
+    render_customer_stage_guidance(locale)
+    search_col, stage_col, agent_col, today_col, priority_col = st.columns([2, 1, 1, 1, 1])
     search_text = search_col.text_input(
         t(locale, "customer.search"),
         placeholder=t(locale, "customer.search_placeholder"),
@@ -809,7 +1001,31 @@ def customer_page(user, locale: str) -> None:
     stage_options.update({translated_stage(locale, stage.value): stage.value for stage in CustomerStage})
     selected_stage_label = stage_col.selectbox(t(locale, "customer.stage_filter"), list(stage_options.keys()), key=f"customer_stage_filter_{user.id}")
     stage_filter = stage_options[selected_stage_label]
-    filtered_customers = filter_customers(customers, search_text, stage_filter)
+    customer_agents = visible_agents(repo, user)
+    agent_filter_options = {t(locale, "filter.all"): None}
+    agent_filter_options.update({agent_display_name(repo, agent.id): agent.id for agent in customer_agents})
+    selected_agent_filter = agent_col.selectbox(t(locale, "filter.agent"), list(agent_filter_options.keys()), key=f"customer_agent_filter_{user.id}")
+    today_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "filter.today"): "today",
+        t(locale, "filter.not_today"): "not_today",
+    }
+    selected_today_filter = today_col.selectbox(t(locale, "filter.today_followup"), list(today_options.keys()), key=f"customer_today_filter_{user.id}")
+    priority_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "schedule.priority_high"): "high",
+        t(locale, "schedule.priority_medium"): "medium",
+        t(locale, "schedule.priority_low"): "low",
+    }
+    selected_priority_filter = priority_col.selectbox(t(locale, "filter.ai_priority"), list(priority_options.keys()), key=f"customer_priority_filter_{user.id}")
+    filtered_customers = filter_customers(
+        customers,
+        search_text,
+        stage_filter,
+        agent_filter_options[selected_agent_filter],
+        today_options[selected_today_filter],
+        priority_options[selected_priority_filter],
+    )
     customers_df = customers_to_dataframe(filtered_customers, locale, repo)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
     render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
@@ -918,6 +1134,29 @@ def daily_log_page(user, locale: str) -> None:
         st.rerun()
 
     logs = repo.list_logs(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
+    log_agent_col, log_date_col, log_issue_col = st.columns(3)
+    log_agent_options = {t(locale, "filter.all"): None}
+    log_agent_options.update({agent_display_name(repo, agent.id): agent.id for agent in visible_agents(repo, user)})
+    selected_log_agent = log_agent_col.selectbox(t(locale, "filter.agent"), list(log_agent_options.keys()), key=f"daily_agent_filter_{user.id}")
+    date_range_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "filter.today"): "today",
+        t(locale, "filter.last_7_days"): "last_7_days",
+        t(locale, "filter.last_30_days"): "last_30_days",
+    }
+    selected_log_range = log_date_col.selectbox(t(locale, "filter.date_range"), list(date_range_options.keys()), key=f"daily_date_filter_{user.id}")
+    issue_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "filter.low_activity"): "low_activity",
+        t(locale, "filter.low_closing"): "low_closing",
+    }
+    selected_log_issue = log_issue_col.selectbox(t(locale, "filter.activity_issue"), list(issue_options.keys()), key=f"daily_issue_filter_{user.id}")
+    logs = filter_daily_logs(
+        logs,
+        log_agent_options[selected_log_agent],
+        date_range_options[selected_log_range],
+        issue_options[selected_log_issue],
+    )
     logs_df = daily_logs_to_dataframe(logs)
     render_simple_table(logs_df.drop(columns=["id", "created_at"]), locale)
 
@@ -1212,6 +1451,26 @@ def today_schedule_page(user, locale: str) -> None:
         for customer in repo.list_customers(TENANT_ID, agent_id=visible_agent_id)
         if customer.next_meeting_date == date.today()
     ]
+    agent_col, stage_col, priority_col = st.columns(3)
+    agent_options = {t(locale, "filter.all"): None}
+    agent_options.update({agent_display_name(repo, agent.id): agent.id for agent in visible_agents(repo, user)})
+    selected_agent = agent_col.selectbox(t(locale, "filter.agent"), list(agent_options.keys()), key=f"schedule_agent_filter_{user.id}")
+    stage_options = {t(locale, "customer.stage_all"): None}
+    stage_options.update({translated_stage(locale, stage.value): stage.value for stage in CustomerStage})
+    selected_stage = stage_col.selectbox(t(locale, "customer.stage_filter"), list(stage_options.keys()), key=f"schedule_stage_filter_{user.id}")
+    priority_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "schedule.priority_high"): "high",
+        t(locale, "schedule.priority_medium"): "medium",
+        t(locale, "schedule.priority_low"): "low",
+    }
+    selected_priority = priority_col.selectbox(t(locale, "filter.ai_priority"), list(priority_options.keys()), key=f"schedule_priority_filter_{user.id}")
+    customers = filter_customers(
+        customers,
+        stage=stage_options[selected_stage],
+        agent_id=agent_options[selected_agent],
+        priority=priority_options[selected_priority],
+    )
     schedule_df = today_schedule_to_dataframe(customers, locale, repo)
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
@@ -1286,6 +1545,33 @@ def ai_training_page(user, locale: str) -> None:
         visible_agent_ids = {agent.id for agent in report_agents(repo, user)}
         reviews = [review for review in repo.list_reviews(TENANT_ID) if review.agent_id in visible_agent_ids]
         logs = [log for log in repo.list_logs(TENANT_ID) if log.agent_id in visible_agent_ids]
+    review_agent_col, review_risk_col, review_date_col = st.columns(3)
+    review_agent_options = {t(locale, "filter.all"): None}
+    review_agent_options.update({agent_display_name(repo, agent.id): agent.id for agent in report_agents(repo, user)})
+    selected_review_agent = review_agent_col.selectbox(t(locale, "filter.agent"), list(review_agent_options.keys()), key=f"training_agent_filter_{user.id}")
+    risk_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "risk.High"): "High",
+        t(locale, "risk.Medium"): "Medium",
+        t(locale, "risk.Low"): "Low",
+    }
+    selected_review_risk = review_risk_col.selectbox(t(locale, "filter.risk"), list(risk_options.keys()), key=f"training_risk_filter_{user.id}")
+    date_range_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "filter.today"): "today",
+        t(locale, "filter.last_7_days"): "last_7_days",
+        t(locale, "filter.last_30_days"): "last_30_days",
+    }
+    selected_review_range = review_date_col.selectbox(t(locale, "filter.date_range"), list(date_range_options.keys()), key=f"training_date_filter_{user.id}")
+    reviews = filter_reviews(
+        reviews,
+        review_agent_options[selected_review_agent],
+        risk_options[selected_review_risk],
+        date_range_options[selected_review_range],
+    )
+    if review_agent_options[selected_review_agent]:
+        logs = [log for log in logs if log.agent_id == review_agent_options[selected_review_agent]]
+    logs = filter_by_date_range(logs, "activity_date", date_range_options[selected_review_range])
     log_index = logs_by_agent_and_date(logs)
     render_simple_table(
         pd.DataFrame(
@@ -1317,6 +1603,12 @@ def ai_training_page(user, locale: str) -> None:
     )
     if user.role == UserRole.AGENT:
         st.info(t(locale, "training.hidden_score_agent_info"))
+    else:
+        filtered_agents = [agent for agent in report_agents(repo, user) if not review_agent_options[selected_review_agent] or agent.id == review_agent_options[selected_review_agent]]
+        scores = repo.list_closing_scores(TENANT_ID)
+        plans = build_visible_agent_coaching_plans(repo, filtered_agents, logs, reviews, scores)
+        st.subheader(t(locale, "coaching.title"))
+        render_simple_table(coaching_plan_to_dataframe(plans, locale), locale)
 
 
 def manager_dashboard_page(user, locale: str) -> None:
@@ -1341,8 +1633,62 @@ def manager_dashboard_page(user, locale: str) -> None:
                 if review.agent_id in agent_ids and review.risk_level == "High"
             ],
         }
+    filter_agent_col, filter_stage_col, filter_score_col, filter_priority_col = st.columns(4)
+    dashboard_agent_options = {t(locale, "filter.all"): None}
+    dashboard_agent_options.update({agent_display_name(repo, agent.id): agent.id for agent in dashboard["agents"]})
+    selected_dashboard_agent = filter_agent_col.selectbox(
+        t(locale, "filter.agent"),
+        list(dashboard_agent_options.keys()),
+        key=f"dashboard_agent_filter_{user.id}",
+    )
+    stage_options = {t(locale, "customer.stage_all"): None}
+    stage_options.update({translated_stage(locale, stage.value): stage.value for stage in CustomerStage})
+    selected_dashboard_stage = filter_stage_col.selectbox(
+        t(locale, "customer.stage_filter"),
+        list(stage_options.keys()),
+        key=f"dashboard_stage_filter_{user.id}",
+    )
+    score_risk_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "hidden_score.risk_high"): "high",
+        t(locale, "hidden_score.risk_medium"): "medium",
+        t(locale, "hidden_score.risk_low"): "low",
+    }
+    selected_score_risk = filter_score_col.selectbox(
+        t(locale, "filter.hidden_score_risk"),
+        list(score_risk_options.keys()),
+        key=f"dashboard_score_risk_filter_{user.id}",
+    )
+    priority_options = {
+        t(locale, "filter.all"): "all",
+        t(locale, "schedule.priority_high"): "high",
+        t(locale, "schedule.priority_medium"): "medium",
+        t(locale, "schedule.priority_low"): "low",
+    }
+    selected_dashboard_priority = filter_priority_col.selectbox(
+        t(locale, "filter.ai_priority"),
+        list(priority_options.keys()),
+        key=f"dashboard_priority_filter_{user.id}",
+    )
+    selected_dashboard_agent_id = dashboard_agent_options[selected_dashboard_agent]
+    if selected_dashboard_agent_id:
+        dashboard["agents"] = [agent for agent in dashboard["agents"] if agent.id == selected_dashboard_agent_id]
+        dashboard["daily_logs"] = [log for log in dashboard["daily_logs"] if log.agent_id == selected_dashboard_agent_id]
+        dashboard["reviews"] = [review for review in dashboard["reviews"] if review.agent_id == selected_dashboard_agent_id]
+        dashboard["closing_scores"] = [score for score in dashboard["closing_scores"] if score.agent_id == selected_dashboard_agent_id]
+        dashboard["high_risk_agent_ids"] = [agent_id for agent_id in dashboard["high_risk_agent_ids"] if agent_id == selected_dashboard_agent_id]
+    dashboard["closing_scores"] = filter_scores(
+        dashboard["closing_scores"],
+        risk_band=score_risk_options[selected_score_risk],
+    )
     team_ids = {agent.team_id for agent in dashboard["agents"] if agent.team_id}
     customers = [customer for team_id in team_ids for customer in repo.list_customers(TENANT_ID, team_id=team_id)]
+    customers = filter_customers(
+        customers,
+        stage=stage_options[selected_dashboard_stage],
+        agent_id=selected_dashboard_agent_id,
+        priority=priority_options[selected_dashboard_priority],
+    )
     metrics = generate_demo_dashboard_metrics(
         dashboard["agents"],
         customers,
@@ -1388,6 +1734,15 @@ def manager_dashboard_page(user, locale: str) -> None:
     render_simple_table(top_agents_to_dataframe(repo, metrics["top_agents"]), locale, team_col)
     team_col.markdown(t(locale, "dashboard.risk_agents"))
     render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
+    team_col.markdown(t(locale, "coaching.title"))
+    coaching_plans = build_visible_agent_coaching_plans(
+        repo,
+        dashboard["agents"],
+        dashboard["daily_logs"],
+        dashboard["reviews"],
+        dashboard["closing_scores"],
+    )
+    render_simple_table(coaching_plan_to_dataframe(coaching_plans, locale), locale, team_col)
 
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
