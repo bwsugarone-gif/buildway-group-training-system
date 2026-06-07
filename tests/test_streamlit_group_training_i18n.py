@@ -27,6 +27,7 @@ RAW_KEY_PREFIXES = (
     "opportunity.",
     "sales.",
     "manager_insight.",
+    "explain.",
 )
 
 

@@ -22,6 +22,24 @@ class ManagerInsight:
     team_next_action_key: str
     summary_key: str
     affected_agent_count: int
+    insight_reason_key: str
+    supporting_metrics: dict[str, float]
+    ai_confidence: int
+
+
+def _empty_performance(agent_id: str) -> SalesPerformanceAnalysis:
+    return SalesPerformanceAnalysis(
+        agent_id=agent_id,
+        performance_score=0,
+        strength_key="",
+        weakness_key="",
+        conversion_problem_stage="activity_gap",
+        explanation_key="",
+        metrics={},
+        team_average_comparison={},
+        performance_gap={},
+        trend_analysis={"direction": "stable", "window_days": 7, "recent_activity": 0, "previous_activity": 0},
+    )
 
 
 def build_manager_insight(
@@ -40,7 +58,7 @@ def build_manager_insight(
     performance_by_agent = {performance.agent_id: performance for performance in performances}
     coaching_plans = [
         build_coaching_plan(
-            performance_by_agent.get(agent.id, SalesPerformanceAnalysis(agent.id, 0, "", "", "activity_gap", "", {})),
+            performance_by_agent.get(agent.id, _empty_performance(agent.id)),
             latest_scores.get(agent.id).hidden_score if agent.id in latest_scores else None,
             today,
         )
@@ -53,6 +71,9 @@ def build_manager_insight(
     ][:5]
     problem_counts = Counter(performance.conversion_problem_stage for performance in performances)
     main_problem = problem_counts.most_common(1)[0][0] if problem_counts else "activity_gap"
+    total_agents = len(agents)
+    affected_count = problem_counts.get(main_problem, 0)
+    confidence = min(95, 50 + min(total_agents, 20) + min(len(opportunities), 25))
 
     return ManagerInsight(
         top_customers=rank_customer_opportunities(opportunities)[:10],
@@ -62,5 +83,13 @@ def build_manager_insight(
         manager_recommendation_key=f"manager_insight.recommendation.{main_problem}",
         team_next_action_key=f"manager_insight.next_action.{main_problem}",
         summary_key="manager_insight.summary",
-        affected_agent_count=problem_counts.get(main_problem, 0),
+        affected_agent_count=affected_count,
+        insight_reason_key=f"manager_insight.reason.{main_problem}",
+        supporting_metrics={
+            "total_agents": total_agents,
+            "affected_agent_count": affected_count,
+            "high_risk_agent_count": len(high_risk_agents),
+            "top_customer_count": min(len(opportunities), 10),
+        },
+        ai_confidence=confidence,
     )

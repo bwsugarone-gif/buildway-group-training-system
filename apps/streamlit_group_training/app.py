@@ -757,10 +757,10 @@ def filter_scores(scores, agent_id: str | None = None, risk_band: str = "all"):
     return filtered
 
 
-def build_agent_coaching_plan(logs, reviews, scores) -> dict:
+def build_agent_coaching_plan(logs, reviews, scores, team_logs=None) -> dict:
     latest_score = max(scores, key=lambda score: (score.score_date, score.created_at), default=None)
     latest_review = max(reviews, key=lambda review: (review.review_date, review.created_at), default=None)
-    performance = analyze_sales_performance(logs)
+    performance = analyze_sales_performance(logs, team_logs=team_logs or logs)
     coaching_plan = build_coaching_plan(performance, latest_score.hidden_score if latest_score else None)
 
     return {
@@ -778,6 +778,10 @@ def build_agent_coaching_plan(logs, reviews, scores) -> dict:
         "manager_note_key": coaching_plan.manager_action_key,
         "target_metric_key": coaching_plan.target_metric_key,
         "target_deadline": coaching_plan.target_deadline,
+        "why_this_coaching_key": coaching_plan.why_this_coaching_key,
+        "target_metric": coaching_plan.target_metric,
+        "target_date": coaching_plan.target_date,
+        "expected_improvement_key": coaching_plan.expected_improvement_key,
         "performance": performance,
         "coaching": coaching_plan,
     }
@@ -792,9 +796,11 @@ def coaching_plan_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataF
                 "root_cause": t(locale, plan["root_cause_key"]),
                 "training_focus": t(locale, plan["training_focus_key"]),
                 "next_action": t(locale, plan["next_action_key"]),
+                "why_this_coaching": t(locale, plan["why_this_coaching_key"]),
                 "manager_note": t(locale, plan["manager_note_key"]),
                 "target_metric": t(locale, plan["target_metric_key"]),
-                "target_deadline": plan["target_deadline"].isoformat(),
+                "target_date": plan["target_date"].isoformat(),
+                "expected_improvement": t(locale, plan["expected_improvement_key"]),
                 "performance_score": plan["metrics"]["performance_score"],
                 "hidden_score": plan["metrics"]["latest_hidden_score"],
                 "risk": translated_risk(locale, plan["metrics"]["latest_risk"]),
@@ -807,9 +813,11 @@ def coaching_plan_to_dataframe(agent_plans: list[dict], locale: str) -> pd.DataF
             "root_cause",
             "training_focus",
             "next_action",
+            "why_this_coaching",
             "manager_note",
             "target_metric",
-            "target_deadline",
+            "target_date",
+            "expected_improvement",
             "performance_score",
             "hidden_score",
             "risk",
@@ -832,6 +840,17 @@ def sales_performance_to_dataframe(agent_plans: list[dict], locale: str) -> pd.D
                 "appointment_rate": f"{performance.metrics['appointment_rate']:.1f}%",
                 "meeting_rate": f"{performance.metrics['meeting_rate']:.1f}%",
                 "closing_rate": f"{performance.metrics['closing_rate']:.1f}%",
+                "team_average": (
+                    f"{performance.team_average_comparison['appointment_rate']:.1f}% / "
+                    f"{performance.team_average_comparison['meeting_rate']:.1f}% / "
+                    f"{performance.team_average_comparison['closing_rate']:.1f}%"
+                ),
+                "performance_gap": (
+                    f"{performance.performance_gap['appointment_rate']:+.1f}% / "
+                    f"{performance.performance_gap['meeting_rate']:+.1f}% / "
+                    f"{performance.performance_gap['closing_rate']:+.1f}%"
+                ),
+                "trend_analysis": t(locale, f"sales.trend.{performance.trend_analysis['direction']}"),
             }
         )
     return pd.DataFrame(
@@ -846,6 +865,9 @@ def sales_performance_to_dataframe(agent_plans: list[dict], locale: str) -> pd.D
             "appointment_rate",
             "meeting_rate",
             "closing_rate",
+            "team_average",
+            "performance_gap",
+            "trend_analysis",
         ],
     )
 
@@ -920,6 +942,68 @@ def render_manager_insight_section(
     top_customer_ids = {analysis.customer_id for analysis in insight.top_customers}
     top_customer_map = {customer_id: opportunity_map[customer_id] for customer_id in top_customer_ids if customer_id in opportunity_map}
     render_simple_table(customer_opportunities_to_dataframe(customers, top_customer_map, locale, repo).head(10), locale)
+    with st.expander(t(locale, "explain.basis_title")):
+        st.markdown(t(locale, "manager_insight.reason_label"))
+        st.write(t(locale, insight.insight_reason_key))
+        st.markdown(t(locale, "explain.supporting_metrics"))
+        render_simple_table(
+            pd.DataFrame(
+                [
+                    {"metric": t(locale, f"manager_insight.metric.{key}"), "value": value}
+                    for key, value in insight.supporting_metrics.items()
+                ]
+            ),
+            locale,
+        )
+        st.markdown(t(locale, "explain.ai_confidence"))
+        st.write(f"{insight.ai_confidence}%")
+
+
+def render_opportunity_basis(opportunity_map: dict[str, object], locale: str) -> None:
+    if not opportunity_map:
+        return
+    with st.expander(t(locale, "explain.basis_title")):
+        rows = []
+        for analysis in rank_customer_opportunities(list(opportunity_map.values()))[:10]:
+            rows.append(
+                {
+                    "id": analysis.customer_id,
+                    "opportunity_score": analysis.opportunity_score,
+                    "score_breakdown": ", ".join(
+                        f"{t(locale, f'opportunity.breakdown.{key}')}={value}"
+                        for key, value in analysis.score_breakdown.items()
+                    ),
+                    "score_reason": t(locale, analysis.score_reason_key),
+                    "confidence": f"{analysis.confidence}%",
+                }
+            )
+        render_simple_table(pd.DataFrame(rows), locale)
+
+
+def hidden_score_breakdown_dataframe(scores, logs, locale: str) -> pd.DataFrame:
+    from verticals.group_training.agents.closing_agent import hidden_score_breakdown
+
+    log_index = {(log.agent_id, log.activity_date): log for log in logs}
+    rows = []
+    for score in scores:
+        log = log_index.get((score.agent_id, score.score_date))
+        if not log:
+            continue
+        breakdown = hidden_score_breakdown(log)
+        rows.append(
+            {
+                "agent_id": score.agent_id,
+                "date": score.score_date.isoformat(),
+                "activity_score": breakdown["activity_score"],
+                "appointment_score": breakdown["appointment_score"],
+                "meeting_score": breakdown["meeting_score"],
+                "closing_score": breakdown["closing_score"],
+                "discipline_score": breakdown["discipline_score"],
+                "hidden_score": score.hidden_score,
+                "risk": t(locale, hidden_score_risk_i18n_key(score.hidden_score)),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agents, logs, reviews, scores) -> list[dict]:
@@ -929,6 +1013,7 @@ def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agen
             [log for log in logs if log.agent_id == agent.id],
             [review for review in reviews if review.agent_id == agent.id],
             [score for score in scores if score.agent_id == agent.id],
+            logs,
         )
         plan["agent_id"] = agent.id
         plan["agent_label"] = agent_display_name(repo, agent.id)
@@ -1211,6 +1296,7 @@ def customer_page(user, locale: str) -> None:
     customers_df = customers_to_dataframe(filtered_customers, locale, repo, opportunity_map)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
     render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
+    render_opportunity_basis(opportunity_map, locale)
 
     with st.form("customer_form"):
         st.markdown(t(locale, "customer.add"))
@@ -1658,6 +1744,7 @@ def today_schedule_page(user, locale: str) -> None:
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
     render_simple_table(schedule_df, locale)
+    render_opportunity_basis(opportunity_map, locale)
     st.info(t(locale, schedule_recommendation_key(customers)))
     pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
     st.subheader(t(locale, "schedule.pending_followups"))
@@ -1961,6 +2048,8 @@ def manager_dashboard_page(user, locale: str) -> None:
         score_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
         score_col.altair_chart(hidden_score_chart(score_summary_df, locale), use_container_width=True)
         render_simple_table(score_summary_df, locale, score_col)
+        with score_col.expander(t(locale, "hidden_score.breakdown_title")) as breakdown_container:
+            render_simple_table(hidden_score_breakdown_dataframe(dashboard["closing_scores"], dashboard["daily_logs"], locale), locale, breakdown_container)
     render_simple_table(scores_df, locale, score_col)
 
 

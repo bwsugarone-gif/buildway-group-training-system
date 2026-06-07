@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from verticals.group_training.agents.closing_agent import hidden_score_risk_level
+from verticals.group_training.agents.closing_agent import calculate_hidden_closing_score, hidden_score_breakdown, hidden_score_risk_level
 from verticals.group_training.agents.coaching_agent import build_coaching_plan
 from verticals.group_training.agents.customer_opportunity_agent import analyze_customer_opportunity
 from verticals.group_training.agents.manager_insight_agent import build_manager_insight
@@ -63,6 +63,10 @@ def test_customer_opportunity_agent_prioritizes_hot_proposal_today_followup():
     assert proposal.priority == "High"
     assert cold.priority == "Low"
     assert hot.opportunity_score > cold.opportunity_score
+    assert hot.score_breakdown["stage_score"] > 0
+    assert hot.score_breakdown["meeting_timing_score"] == 15
+    assert hot.score_reason_key == "opportunity.score_reason"
+    assert hot.confidence >= 60
 
 
 def test_coaching_agent_high_calls_low_appointments_generates_topic():
@@ -83,8 +87,15 @@ def test_coaching_agent_high_calls_low_appointments_generates_topic():
     plan = build_coaching_plan(performance, hidden_score=55)
 
     assert performance.conversion_problem_stage == "appointment_conversion"
+    assert performance.team_average_comparison
+    assert "appointment_rate" in performance.performance_gap
+    assert performance.trend_analysis["direction"] in {"up", "down", "stable"}
     assert plan.coaching_topic_key == "coaching.topic.appointment_conversion"
     assert plan.target_metric_key == "coaching.target_metric.appointment_conversion"
+    assert plan.why_this_coaching_key == "coaching.why.appointment_conversion"
+    assert plan.target_metric == "12% appointment rate"
+    assert plan.target_date == plan.target_deadline
+    assert plan.expected_improvement_key == "coaching.expected_improvement.appointment_conversion"
 
 
 def test_manager_insight_agent_returns_team_insight_and_top_lists():
@@ -117,6 +128,9 @@ def test_manager_insight_agent_returns_team_insight_and_top_lists():
     assert len(insight.top_customers) <= 10
     assert insight.coaching_plans
     assert insight.summary_key == "manager_insight.summary"
+    assert insight.insight_reason_key.startswith("manager_insight.reason.")
+    assert insight.supporting_metrics["total_agents"] == len(dashboard["agents"])
+    assert insight.ai_confidence >= 50
 
 
 def test_agent_role_cannot_receive_hidden_scores_from_dashboard_service():
@@ -128,3 +142,29 @@ def test_agent_role_cannot_receive_hidden_scores_from_dashboard_service():
     dashboard = DashboardService(repo).manager_dashboard(TENANT_ID, "mgr_001", UserRole.AGENT)
 
     assert dashboard["closing_scores"] == []
+
+
+def test_hidden_score_breakdown_is_explainable_and_sums_to_score():
+    log = DailyActivityLog(
+        TENANT_ID,
+        DEFAULT_TEAM_ID,
+        "agt_001",
+        date.today(),
+        call_count=20,
+        whatsapp_count=8,
+        appointment_count=3,
+        meeting_count=2,
+        closing_count=1,
+    )
+
+    breakdown = hidden_score_breakdown(log)
+    score = calculate_hidden_closing_score(log)
+
+    assert set(breakdown) == {
+        "activity_score",
+        "appointment_score",
+        "meeting_score",
+        "closing_score",
+        "discipline_score",
+    }
+    assert sum(breakdown.values()) == score.hidden_score

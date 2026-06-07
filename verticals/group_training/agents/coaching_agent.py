@@ -20,6 +20,10 @@ class CoachingPlan:
     target_metric_key: str
     target_deadline: date
     risk_level: str
+    why_this_coaching_key: str
+    target_metric: str
+    target_date: date
+    expected_improvement_key: str
 
 
 def build_coaching_plan(
@@ -43,4 +47,20 @@ def build_coaching_plan(
         target_metric_key=f"coaching.target_metric.{stage}",
         target_deadline=today + timedelta(days=7),
         risk_level=risk_level,
+        why_this_coaching_key=f"coaching.why.{stage}",
+        target_metric=_target_metric(stage),
+        target_date=today + timedelta(days=7),
+        expected_improvement_key=f"coaching.expected_improvement.{stage}",
     )
+
+
+def _target_metric(stage: str) -> str:
+    if stage == "activity_gap":
+        return "20 outreach/day"
+    if stage == "appointment_conversion":
+        return "12% appointment rate"
+    if stage == "meeting_conversion":
+        return "60% meeting attendance"
+    if stage == "closing_conversion":
+        return "20% closing rate"
+    return "Maintain current conversion"
