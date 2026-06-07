@@ -28,7 +28,7 @@
 - [ ] Security layer (API key auth, rate limiting, input sanitisation)
 - [ ] Vector embeddings for RAG (replace keyword search)
 - [ ] Audit logging
-- [ ] Client portal (streamlit_client)
+- [ ] Client portal inside the group training product experience
 
 ## Phase 3 — ERP / Inventory API Integration
 

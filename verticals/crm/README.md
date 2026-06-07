@@ -27,7 +27,7 @@ Customer sends WhatsApp message
     → core/rag/ searches tenant knowledge base (FAQ, product catalog)
     → verticals/crm/ builds prompt with context
     → LLM generates draft reply (using tenant's API key)
-    → Draft shown in apps/streamlit_admin/ for staff review
+    → Draft shown in the group training product UI for staff review
     → Staff approves / edits / rejects
     → Approved reply sent via WhatsApp API
     → core/memory/ saves session and message

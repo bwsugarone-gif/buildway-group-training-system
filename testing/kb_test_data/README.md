@@ -249,7 +249,7 @@ After validating with this test dataset:
 For questions or issues with test data:
 - Check `buildway-ai-core/docs/ROADMAP.md` for development status
 - Review `buildway-ai-core/core/rag/` for implementation details
-- Test with `apps/streamlit_demo/app.py` Knowledge Base page
+- Test with `apps/streamlit_group_training/app.py`
 
 ---
 
