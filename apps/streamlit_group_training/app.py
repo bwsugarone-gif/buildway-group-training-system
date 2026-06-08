@@ -781,9 +781,14 @@ def filter_scores(scores, agent_id: str | None = None, risk_band: str = "all"):
 
 
 def build_agent_coaching_plan(logs, reviews, scores, team_logs=None) -> dict:
+    logs = safe_list(logs)
+    reviews = safe_list(reviews)
+    scores = safe_list(scores)
+    team_logs = safe_list(team_logs) if team_logs is not None else logs
+    
     latest_score = max(scores, key=lambda score: (score.score_date, score.created_at), default=None)
     latest_review = max(reviews, key=lambda review: (review.review_date, review.created_at), default=None)
-    performance = analyze_sales_performance(logs, team_logs=team_logs or logs)
+    performance = analyze_sales_performance(logs, team_logs=team_logs)
     coaching_plan = build_coaching_plan(performance, latest_score.hidden_score if latest_score else None)
 
     return {
@@ -1039,6 +1044,11 @@ def hidden_score_breakdown_dataframe(scores, logs, locale: str) -> pd.DataFrame:
 
 
 def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agents, logs, reviews, scores) -> list[dict]:
+    agents = safe_list(agents)
+    logs = safe_list(logs)
+    reviews = safe_list(reviews)
+    scores = safe_list(scores)
+    
     plans = []
     for agent in agents:
         plan = build_agent_coaching_plan(
