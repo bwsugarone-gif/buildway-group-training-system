@@ -1924,13 +1924,32 @@ def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: s
         st.info(t(locale, "training.today_recommendation_empty"))
 
     insight_col_1, insight_col_2 = st.columns(2)
+    
+    # High potential customers - max 5 core columns
     high_potential_df = customers_to_dataframe(insights["high_potential_customers"], locale, repo)
     insight_col_1.markdown(t(locale, "training.high_potential_customers"))
-    render_simple_table(high_potential_df.drop(columns=["id", "created_at"]), locale, insight_col_1)
+    core_cols = ["customer", "stage", "agent_id", "opportunity_score", "priority"]
+    available_core = [c for c in core_cols if c in high_potential_df.columns]
+    render_simple_table(high_potential_df[available_core], locale, insight_col_1)
+    
+    # Expander for AI details
+    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
+    available_expander = [c for c in expander_cols if c in high_potential_df.columns]
+    if not high_potential_df.empty and available_expander:
+        with insight_col_1.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(high_potential_df[available_expander], locale)
 
+    # Followup customers - max 5 core columns
     followup_df = customers_to_dataframe(insights["followup_customers"], locale, repo)
     insight_col_2.markdown(t(locale, "training.followup_customers"))
-    render_simple_table(followup_df.drop(columns=["id", "created_at"]), locale, insight_col_2)
+    followup_core = [c for c in core_cols if c in followup_df.columns]
+    render_simple_table(followup_df[followup_core], locale, insight_col_2)
+    
+    # Expander for AI details
+    followup_expander = [c for c in expander_cols if c in followup_df.columns]
+    if not followup_df.empty and followup_expander:
+        with insight_col_2.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(followup_df[followup_expander], locale)
 
     if user.role == UserRole.AGENT:
         st.caption(t(locale, "training.agent_activity_reminder", risk=translated_risk(locale, insights["latest_risk"])))
