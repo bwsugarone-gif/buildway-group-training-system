@@ -1250,6 +1250,78 @@ def report_agents(repo: SQLiteGroupTrainingRepository, user):
     return [candidate for candidate in repo.list_users(TENANT_ID) if candidate.role == UserRole.AGENT]
 
 
+def render_customer_360(repo, customers, locale: str, user) -> None:
+    """Customer 360 detail view with tabs."""
+    if not customers:
+        return
+    st.subheader(t(locale, "customer360.title"))
+    customer_map = {f"{c.name} ({c.id[-6:] if len(c.id) > 6 else c.id})": c for c in customers}
+    selected_label = st.selectbox(
+        t(locale, "customer360.select_customer"),
+        list(customer_map.keys()),
+        key=f"customer360_select_{user.id}",
+    )
+    selected = customer_map[selected_label]
+    service = CustomerService(repo)
+    opportunity_map = build_customer_opportunity_map(repo, [selected])
+    opp = opportunity_map.get(selected.id)
+
+    tab_basic, tab_history, tab_ai, tab_basis = st.tabs([
+        t(locale, "customer360.tab_basic"),
+        t(locale, "customer360.tab_history"),
+        t(locale, "customer360.tab_ai"),
+        t(locale, "customer360.tab_basis"),
+    ])
+
+    with tab_basic:
+        col1, col2 = st.columns(2)
+        col1.markdown(f"**{t(locale, 'customer.name')}:** {selected.name}")
+        col1.markdown(f"**{t(locale, 'customer.phone')}:** {selected.phone or '—'}")
+        col1.markdown(f"**{t(locale, 'customer.stage')}:** {translated_stage(locale, selected.stage.value)}")
+        col2.markdown(f"**{t(locale, 'customer.agent')}:** {agent_display_name(repo, selected.agent_id)}")
+        col2.markdown(f"**{t(locale, 'customer.next_meeting_date')}:** {selected.next_meeting_date.isoformat() if selected.next_meeting_date else '—'}")
+        col2.markdown(f"**{t(locale, 'customer.notes')}:** {selected.notes or '—'}")
+
+    with tab_history:
+        followups = service.customer_history(TENANT_ID, selected.id)
+        if not followups:
+            st.info(t(locale, "customer360.no_history"))
+        else:
+            for f in followups:
+                st.markdown(f"**{f.created_at.strftime('%Y-%m-%d %H:%M')}** — {agent_display_name(repo, f.agent_id)}")
+                st.write(f.note or "—")
+                if f.next_action:
+                    st.caption(f"{t(locale, 'customer.next_action')}: {f.next_action}")
+                st.divider()
+
+    with tab_ai:
+        if opp:
+            c1, c2 = st.columns(2)
+            c1.metric(t(locale, "customer360.ai_score"), opp.opportunity_score)
+            c2.metric(t(locale, "customer360.ai_priority"), t(locale, opportunity_priority_key(opp.priority)))
+            st.markdown(f"**{t(locale, 'customer360.reason')}:** {t(locale, opp.reason_key)}")
+            st.markdown(f"**{t(locale, 'customer360.next_action')}:** {t(locale, opp.next_best_action_key)}")
+            st.markdown(f"**{t(locale, 'customer360.suggested_message')}:** {t(locale, opp.suggested_message_key)}")
+            st.markdown(f"**{t(locale, 'customer360.deadline')}:** {opp.followup_deadline.isoformat() if opp.followup_deadline else '—'}")
+        else:
+            st.info(t(locale, "customer360.no_ai_data"))
+
+    with tab_basis:
+        if opp:
+            breakdown = opp.score_breakdown if isinstance(opp.score_breakdown, dict) else {}
+            if breakdown:
+                st.markdown(f"**{t(locale, 'customer360.score_breakdown')}**")
+                for key, val in breakdown.items():
+                    st.caption(f"{t(locale, f'opportunity.breakdown.{key}')}: {val}")
+            score_reason = opp.score_reason_key if isinstance(opp.score_reason_key, str) else ""
+            if score_reason:
+                st.markdown(f"**{t(locale, 'customer360.score_reason')}:** {t(locale, score_reason)}")
+            confidence = opp.confidence if isinstance(opp.confidence, (int, float)) else 0
+            st.markdown(f"**{t(locale, 'customer360.confidence')}:** {confidence}%")
+        else:
+            st.info(t(locale, "customer360.no_basis_data"))
+
+
 def customer_page(user, locale: str) -> None:
     repo = get_repo()
     service = CustomerService(repo)
@@ -1295,8 +1367,24 @@ def customer_page(user, locale: str) -> None:
     opportunity_map = build_customer_opportunity_map(repo, filtered_customers)
     customers_df = customers_to_dataframe(filtered_customers, locale, repo, opportunity_map)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
-    render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
+
+    # --- CRM Summary Table: max 6 core columns ---
+    core_cols = ["customer", "stage", "agent_id", "opportunity_score", "priority", "next_meeting_date"]
+    available_core = [c for c in core_cols if c in customers_df.columns]
+    render_simple_table(customers_df[available_core], locale)
+
+    # --- Expander: AI details for each customer ---
+    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "followup_deadline", "notes"]
+    available_expander = [c for c in expander_cols if c in customers_df.columns]
+    if not customers_df.empty and available_expander:
+        with st.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(customers_df[available_expander], locale)
+
     render_opportunity_basis(opportunity_map, locale)
+
+    # --- Customer 360 View ---
+    if filtered_customers:
+        render_customer_360(repo, filtered_customers, locale, user)
 
     with st.form("customer_form"):
         st.markdown(t(locale, "customer.add"))
@@ -1880,7 +1968,20 @@ def ai_training_page(user, locale: str) -> None:
         st.info(t(locale, "training.hidden_score_agent_info"))
     else:
         st.subheader(t(locale, "coaching.title"))
-        render_simple_table(coaching_plan_to_dataframe(plans, locale), locale)
+        # --- Coaching Summary Table: max 4 core columns ---
+        coaching_df = coaching_plan_to_dataframe(plans, locale)
+        core_coaching_cols = ["agent_id", "hidden_score", "risk", "priority"]
+        available_coaching_core = [c for c in core_coaching_cols if c in coaching_df.columns]
+        if not available_coaching_core:
+            available_coaching_core = ["agent_id", "hidden_score", "risk", "performance_score"]
+        render_simple_table(coaching_df[available_coaching_core], locale)
+        
+        # --- Expander: Coaching Plan Details ---
+        expander_coaching_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "why_this_coaching", "manager_note", "target_metric", "target_date", "expected_improvement"]
+        available_coaching_expander = [c for c in expander_coaching_cols if c in coaching_df.columns]
+        if not coaching_df.empty and available_coaching_expander:
+            with st.expander(t(locale, "coaching.expander_plan_details")):
+                render_simple_table(coaching_df[available_coaching_expander], locale)
 
 
 def manager_dashboard_page(user, locale: str) -> None:
@@ -2027,7 +2128,17 @@ def manager_dashboard_page(user, locale: str) -> None:
     team_col.markdown(t(locale, "dashboard.risk_agents"))
     render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
     team_col.markdown(t(locale, "coaching.title"))
-    render_simple_table(coaching_plan_to_dataframe(coaching_plans, locale), locale, team_col)
+    # --- Dashboard Coaching Summary: 4 core columns ---
+    dash_coaching_df = coaching_plan_to_dataframe(coaching_plans, locale)
+    dash_core_cols = ["agent_id", "hidden_score", "risk", "performance_score"]
+    dash_available_core = [c for c in dash_core_cols if c in dash_coaching_df.columns]
+    render_simple_table(dash_coaching_df[dash_available_core], locale, team_col)
+    # --- Expander: full coaching plan ---
+    dash_expander_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "manager_note", "target_metric", "target_date", "expected_improvement"]
+    dash_available_expander = [c for c in dash_expander_cols if c in dash_coaching_df.columns]
+    if not dash_coaching_df.empty and dash_available_expander:
+        with team_col.expander(t(locale, "coaching.expander_plan_details")):
+            render_simple_table(dash_coaching_df[dash_available_expander], locale)
 
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
