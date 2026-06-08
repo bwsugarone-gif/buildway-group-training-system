@@ -77,6 +77,29 @@ def t(locale: str, key: str, **kwargs) -> str:
     return translate(locale, key, **kwargs)
 
 
+def safe_dict(value):
+    """Return value if dict, else empty dict."""
+    return value if isinstance(value, dict) else {}
+
+
+def safe_list(value):
+    """Return value if list, else empty list."""
+    return value if isinstance(value, list) else []
+
+
+def safe_text(value, fallback=""):
+    """Return value if non-empty string, else fallback."""
+    return value if isinstance(value, str) and value.strip() else fallback
+
+
+def safe_number(value, default=0):
+    """Return numeric value, else default."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def is_raw_i18n_key(value: str) -> bool:
     return value.strip().startswith(RAW_I18N_PREFIXES)
 
@@ -965,19 +988,28 @@ def render_opportunity_basis(opportunity_map: dict[str, object], locale: str) ->
     with st.expander(t(locale, "explain.basis_title")):
         rows = []
         for analysis in rank_customer_opportunities(list(opportunity_map.values()))[:10]:
+            breakdown = safe_dict(analysis.score_breakdown)
+            breakdown_text = ", ".join(
+                f"{t(locale, f'opportunity.breakdown.{key}')}={value}"
+                for key, value in breakdown.items()
+            ) if breakdown else "—"
+            
+            score_reason = safe_text(analysis.score_reason_key)
+            confidence = safe_number(analysis.confidence, 0)
+            
             rows.append(
                 {
                     "id": analysis.customer_id,
                     "opportunity_score": analysis.opportunity_score,
-                    "score_breakdown": ", ".join(
-                        f"{t(locale, f'opportunity.breakdown.{key}')}={value}"
-                        for key, value in analysis.score_breakdown.items()
-                    ),
-                    "score_reason": t(locale, analysis.score_reason_key),
-                    "confidence": f"{analysis.confidence}%",
+                    "score_breakdown": breakdown_text,
+                    "score_reason": t(locale, score_reason) if score_reason else "—",
+                    "confidence": f"{confidence}%",
                 }
             )
-        render_simple_table(pd.DataFrame(rows), locale)
+        if rows:
+            render_simple_table(pd.DataFrame(rows), locale)
+        else:
+            st.info(t(locale, "customer360.no_basis_data"))
 
 
 def hidden_score_breakdown_dataframe(scores, logs, locale: str) -> pd.DataFrame:
@@ -1831,7 +1863,19 @@ def today_schedule_page(user, locale: str) -> None:
     schedule_df = today_schedule_to_dataframe(customers, locale, repo, opportunity_map)
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
-    render_simple_table(schedule_df, locale)
+    
+    # --- Today Schedule Summary: max 6 core columns ---
+    core_schedule_cols = ["customer", "stage", "agent_id", "phone", "opportunity_score", "priority"]
+    available_schedule_core = [c for c in core_schedule_cols if c in schedule_df.columns]
+    render_simple_table(schedule_df[available_schedule_core], locale)
+    
+    # --- Expander: AI details and notes ---
+    expander_schedule_cols = ["customer", "opportunity_reason", "contact_method", "next_best_action", "suggested_message", "notes", "today_meeting"]
+    available_schedule_expander = [c for c in expander_schedule_cols if c in schedule_df.columns]
+    if not schedule_df.empty and available_schedule_expander:
+        with st.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(schedule_df[available_schedule_expander], locale)
+    
     render_opportunity_basis(opportunity_map, locale)
     st.info(t(locale, schedule_recommendation_key(customers)))
     pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
