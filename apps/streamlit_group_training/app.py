@@ -77,6 +77,29 @@ def t(locale: str, key: str, **kwargs) -> str:
     return translate(locale, key, **kwargs)
 
 
+def safe_dict(value):
+    """Return value if dict, else empty dict."""
+    return value if isinstance(value, dict) else {}
+
+
+def safe_list(value):
+    """Return value if list, else empty list."""
+    return value if isinstance(value, list) else []
+
+
+def safe_text(value, fallback=""):
+    """Return value if non-empty string, else fallback."""
+    return value if isinstance(value, str) and value.strip() else fallback
+
+
+def safe_number(value, default=0):
+    """Return numeric value, else default."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def is_raw_i18n_key(value: str) -> bool:
     return value.strip().startswith(RAW_I18N_PREFIXES)
 
@@ -758,9 +781,14 @@ def filter_scores(scores, agent_id: str | None = None, risk_band: str = "all"):
 
 
 def build_agent_coaching_plan(logs, reviews, scores, team_logs=None) -> dict:
+    logs = safe_list(logs)
+    reviews = safe_list(reviews)
+    scores = safe_list(scores)
+    team_logs = safe_list(team_logs) if team_logs is not None else logs
+    
     latest_score = max(scores, key=lambda score: (score.score_date, score.created_at), default=None)
     latest_review = max(reviews, key=lambda review: (review.review_date, review.created_at), default=None)
-    performance = analyze_sales_performance(logs, team_logs=team_logs or logs)
+    performance = analyze_sales_performance(logs, team_logs=team_logs)
     coaching_plan = build_coaching_plan(performance, latest_score.hidden_score if latest_score else None)
 
     return {
@@ -965,19 +993,28 @@ def render_opportunity_basis(opportunity_map: dict[str, object], locale: str) ->
     with st.expander(t(locale, "explain.basis_title")):
         rows = []
         for analysis in rank_customer_opportunities(list(opportunity_map.values()))[:10]:
+            breakdown = safe_dict(analysis.score_breakdown)
+            breakdown_text = ", ".join(
+                f"{t(locale, f'opportunity.breakdown.{key}')}={value}"
+                for key, value in breakdown.items()
+            ) if breakdown else "—"
+            
+            score_reason = safe_text(analysis.score_reason_key)
+            confidence = safe_number(analysis.confidence, 0)
+            
             rows.append(
                 {
                     "id": analysis.customer_id,
                     "opportunity_score": analysis.opportunity_score,
-                    "score_breakdown": ", ".join(
-                        f"{t(locale, f'opportunity.breakdown.{key}')}={value}"
-                        for key, value in analysis.score_breakdown.items()
-                    ),
-                    "score_reason": t(locale, analysis.score_reason_key),
-                    "confidence": f"{analysis.confidence}%",
+                    "score_breakdown": breakdown_text,
+                    "score_reason": t(locale, score_reason) if score_reason else "—",
+                    "confidence": f"{confidence}%",
                 }
             )
-        render_simple_table(pd.DataFrame(rows), locale)
+        if rows:
+            render_simple_table(pd.DataFrame(rows), locale)
+        else:
+            st.info(t(locale, "customer360.no_basis_data"))
 
 
 def hidden_score_breakdown_dataframe(scores, logs, locale: str) -> pd.DataFrame:
@@ -1007,6 +1044,11 @@ def hidden_score_breakdown_dataframe(scores, logs, locale: str) -> pd.DataFrame:
 
 
 def build_visible_agent_coaching_plans(repo: SQLiteGroupTrainingRepository, agents, logs, reviews, scores) -> list[dict]:
+    agents = safe_list(agents)
+    logs = safe_list(logs)
+    reviews = safe_list(reviews)
+    scores = safe_list(scores)
+    
     plans = []
     for agent in agents:
         plan = build_agent_coaching_plan(
@@ -1250,6 +1292,112 @@ def report_agents(repo: SQLiteGroupTrainingRepository, user):
     return [candidate for candidate in repo.list_users(TENANT_ID) if candidate.role == UserRole.AGENT]
 
 
+def render_customer_360(repo, customers, locale: str, user) -> None:
+    """Customer 360 detail view with tabs."""
+    if not customers:
+        return
+    st.subheader(t(locale, "customer360.title"))
+    customer_map = {f"{c.name} ({c.id[-6:] if len(c.id) > 6 else c.id})": c for c in customers}
+    selected_label = st.selectbox(
+        t(locale, "customer360.select_customer"),
+        list(customer_map.keys()),
+        key=f"customer360_select_{user.id}",
+    )
+    selected = customer_map[selected_label]
+    service = CustomerService(repo)
+    opportunity_map = build_customer_opportunity_map(repo, [selected])
+    opp = opportunity_map.get(selected.id)
+
+    tab_basic, tab_history, tab_ai, tab_basis = st.tabs([
+        t(locale, "customer360.tab_basic"),
+        t(locale, "customer360.tab_history"),
+        t(locale, "customer360.tab_ai"),
+        t(locale, "customer360.tab_basis"),
+    ])
+
+    with tab_basic:
+        col1, col2 = st.columns(2)
+        col1.markdown(f"**{t(locale, 'customer.name')}:** {selected.name}")
+        col1.markdown(f"**{t(locale, 'customer.phone')}:** {selected.phone or '—'}")
+        col1.markdown(f"**{t(locale, 'customer.stage')}:** {translated_stage(locale, selected.stage.value)}")
+        col2.markdown(f"**{t(locale, 'customer.agent')}:** {agent_display_name(repo, selected.agent_id)}")
+        col2.markdown(f"**{t(locale, 'customer.next_meeting_date')}:** {selected.next_meeting_date.isoformat() if selected.next_meeting_date else '—'}")
+        col2.markdown(f"**{t(locale, 'customer.notes')}:** {selected.notes or '—'}")
+
+    with tab_history:
+        followups = service.customer_history(TENANT_ID, selected.id)
+        if not followups:
+            st.info(t(locale, "customer360.no_history"))
+        else:
+            for f in followups:
+                st.markdown(f"**{f.created_at.strftime('%Y-%m-%d %H:%M')}** — {agent_display_name(repo, f.agent_id)}")
+                st.write(f.note or "—")
+                if f.next_action:
+                    st.caption(f"{t(locale, 'customer.next_action')}: {f.next_action}")
+                st.divider()
+
+    with tab_ai:
+        if opp:
+            c1, c2 = st.columns(2)
+            c1.metric(t(locale, "customer360.ai_score"), opp.opportunity_score)
+            c2.metric(t(locale, "customer360.ai_priority"), t(locale, opportunity_priority_key(opp.priority)))
+            st.markdown(f"**{t(locale, 'customer360.reason')}:** {t(locale, opp.reason_key)}")
+            st.markdown(f"**{t(locale, 'customer360.next_action')}:** {t(locale, opp.next_best_action_key)}")
+            st.markdown(f"**{t(locale, 'customer360.suggested_message')}:** {t(locale, opp.suggested_message_key)}")
+            st.markdown(f"**{t(locale, 'customer360.deadline')}:** {opp.followup_deadline.isoformat() if opp.followup_deadline else '—'}")
+
+            # --- DeepSeek AI Follow-up Recommendation ---
+            from apps.streamlit_group_training.services.llm_service import (
+                build_customer_followup_prompt, get_llm_or_fallback, llm_enabled
+            )
+            st.divider()
+            if not llm_enabled():
+                st.caption(t(locale, "llm.api_disabled"))
+            else:
+                cache_key = f"llm_customer_followup_{selected.id}"
+                if cache_key not in st.session_state:
+                    with st.spinner(t(locale, "llm.generating")):
+                        prompt = build_customer_followup_prompt(selected, opp)
+                        text, used_llm = get_llm_or_fallback(
+                            prompt,
+                            f"{t(locale, 'customer360.next_action')}: {t(locale, opp.next_best_action_key)}\n"
+                            f"WhatsApp: {t(locale, opp.suggested_message_key)}"
+                        )
+                        st.session_state[cache_key] = (text, used_llm)
+                text, used_llm = st.session_state[cache_key]
+                lines = text.split("\n")
+                followup_lines = [l for l in lines if l.startswith("Follow-up Recommendation:") or l.startswith("跟進建議:")]
+                whatsapp_lines = [l for l in lines if l.startswith("WhatsApp Opening:") or l.startswith("WhatsApp 開場句:")]
+                if followup_lines:
+                    st.markdown(f"**{t(locale, 'llm.customer_followup_title')}**")
+                    st.info(followup_lines[0].split(":", 1)[-1].strip())
+                if whatsapp_lines:
+                    st.markdown(f"**{t(locale, 'llm.whatsapp_opening_title')}**")
+                    st.success(whatsapp_lines[0].split(":", 1)[-1].strip())
+                if not followup_lines and not whatsapp_lines and text:
+                    st.markdown(f"**{t(locale, 'llm.customer_followup_title')}**")
+                    st.info(text)
+                if not used_llm:
+                    st.caption(t(locale, "llm.fallback_notice"))
+        else:
+            st.info(t(locale, "customer360.no_ai_data"))
+
+    with tab_basis:
+        if opp:
+            breakdown = opp.score_breakdown if isinstance(opp.score_breakdown, dict) else {}
+            if breakdown:
+                st.markdown(f"**{t(locale, 'customer360.score_breakdown')}**")
+                for key, val in breakdown.items():
+                    st.caption(f"{t(locale, f'opportunity.breakdown.{key}')}: {val}")
+            score_reason = opp.score_reason_key if isinstance(opp.score_reason_key, str) else ""
+            if score_reason:
+                st.markdown(f"**{t(locale, 'customer360.score_reason')}:** {t(locale, score_reason)}")
+            confidence = opp.confidence if isinstance(opp.confidence, (int, float)) else 0
+            st.markdown(f"**{t(locale, 'customer360.confidence')}:** {confidence}%")
+        else:
+            st.info(t(locale, "customer360.no_basis_data"))
+
+
 def customer_page(user, locale: str) -> None:
     repo = get_repo()
     service = CustomerService(repo)
@@ -1295,8 +1443,24 @@ def customer_page(user, locale: str) -> None:
     opportunity_map = build_customer_opportunity_map(repo, filtered_customers)
     customers_df = customers_to_dataframe(filtered_customers, locale, repo, opportunity_map)
     st.caption(t(locale, "customer.showing_count", filtered=len(filtered_customers), total=len(customers)))
-    render_simple_table(customers_df.drop(columns=["id", "created_at"]), locale)
+
+    # --- CRM Summary Table: max 6 core columns ---
+    core_cols = ["customer", "stage", "agent_id", "opportunity_score", "priority", "next_meeting_date"]
+    available_core = [c for c in core_cols if c in customers_df.columns]
+    render_simple_table(customers_df[available_core], locale)
+
+    # --- Expander: AI details for each customer ---
+    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "followup_deadline", "notes"]
+    available_expander = [c for c in expander_cols if c in customers_df.columns]
+    if not customers_df.empty and available_expander:
+        with st.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(customers_df[available_expander], locale)
+
     render_opportunity_basis(opportunity_map, locale)
+
+    # --- Customer 360 View ---
+    if filtered_customers:
+        render_customer_360(repo, filtered_customers, locale, user)
 
     with st.form("customer_form"):
         st.markdown(t(locale, "customer.add"))
@@ -1743,7 +1907,19 @@ def today_schedule_page(user, locale: str) -> None:
     schedule_df = today_schedule_to_dataframe(customers, locale, repo, opportunity_map)
     st.info(t(locale, "schedule.today_followup_note"))
     st.caption(t(locale, "schedule.showing_count", total=len(customers)))
-    render_simple_table(schedule_df, locale)
+    
+    # --- Today Schedule Summary: max 6 core columns ---
+    core_schedule_cols = ["customer", "stage", "agent_id", "phone", "opportunity_score", "priority"]
+    available_schedule_core = [c for c in core_schedule_cols if c in schedule_df.columns]
+    render_simple_table(schedule_df[available_schedule_core], locale)
+    
+    # --- Expander: AI details and notes ---
+    expander_schedule_cols = ["customer", "opportunity_reason", "contact_method", "next_best_action", "suggested_message", "notes", "today_meeting"]
+    available_schedule_expander = [c for c in expander_schedule_cols if c in schedule_df.columns]
+    if not schedule_df.empty and available_schedule_expander:
+        with st.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(schedule_df[available_schedule_expander], locale)
+    
     render_opportunity_basis(opportunity_map, locale)
     st.info(t(locale, schedule_recommendation_key(customers)))
     pending_followups_df = visible_followups_to_dataframe(repo, user, locale, pending_only=True)
@@ -1782,13 +1958,32 @@ def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: s
         st.info(t(locale, "training.today_recommendation_empty"))
 
     insight_col_1, insight_col_2 = st.columns(2)
+    
+    # High potential customers - max 5 core columns
     high_potential_df = customers_to_dataframe(insights["high_potential_customers"], locale, repo)
     insight_col_1.markdown(t(locale, "training.high_potential_customers"))
-    render_simple_table(high_potential_df.drop(columns=["id", "created_at"]), locale, insight_col_1)
+    core_cols = ["customer", "stage", "agent_id", "opportunity_score", "priority"]
+    available_core = [c for c in core_cols if c in high_potential_df.columns]
+    render_simple_table(high_potential_df[available_core], locale, insight_col_1)
+    
+    # Expander for AI details
+    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
+    available_expander = [c for c in expander_cols if c in high_potential_df.columns]
+    if not high_potential_df.empty and available_expander:
+        with insight_col_1.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(high_potential_df[available_expander], locale)
 
+    # Followup customers - max 5 core columns
     followup_df = customers_to_dataframe(insights["followup_customers"], locale, repo)
     insight_col_2.markdown(t(locale, "training.followup_customers"))
-    render_simple_table(followup_df.drop(columns=["id", "created_at"]), locale, insight_col_2)
+    followup_core = [c for c in core_cols if c in followup_df.columns]
+    render_simple_table(followup_df[followup_core], locale, insight_col_2)
+    
+    # Expander for AI details
+    followup_expander = [c for c in expander_cols if c in followup_df.columns]
+    if not followup_df.empty and followup_expander:
+        with insight_col_2.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(followup_df[followup_expander], locale)
 
     if user.role == UserRole.AGENT:
         st.caption(t(locale, "training.agent_activity_reminder", risk=translated_risk(locale, insights["latest_risk"])))
@@ -1878,9 +2073,91 @@ def ai_training_page(user, locale: str) -> None:
     )
     if user.role == UserRole.AGENT:
         st.info(t(locale, "training.hidden_score_agent_info"))
+
+        # --- DeepSeek Agent Coaching (no hidden score) ---
+        from apps.streamlit_group_training.services.llm_service import (
+            build_agent_coaching_prompt, get_llm_or_fallback, llm_enabled
+        )
+        if plans:
+            agent_plan = plans[0]
+            st.divider()
+            st.subheader(t(locale, "llm.agent_coaching_title"))
+            if not llm_enabled():
+                st.caption(t(locale, "llm.api_disabled"))
+            else:
+                cache_key = f"llm_agent_coaching_{user.id}"
+                if cache_key not in st.session_state:
+                    with st.spinner(t(locale, "llm.generating")):
+                        prompt = build_agent_coaching_prompt(
+                            user,
+                            agent_plan.get("performance"),
+                            agent_plan.get("coaching"),
+                        )
+                        text, used_llm = get_llm_or_fallback(
+                            prompt,
+                            t(locale, agent_plan.get("root_cause_key", "coaching.root_cause.activity_gap"))
+                        )
+                        st.session_state[cache_key] = (text, used_llm)
+                text, used_llm = st.session_state[cache_key]
+                if text:
+                    st.info(text)
+                if not used_llm:
+                    st.caption(t(locale, "llm.fallback_notice"))
     else:
         st.subheader(t(locale, "coaching.title"))
-        render_simple_table(coaching_plan_to_dataframe(plans, locale), locale)
+        # --- Coaching Summary Table: max 4 core columns ---
+        coaching_df = coaching_plan_to_dataframe(plans, locale)
+        core_coaching_cols = ["agent_id", "hidden_score", "risk", "priority"]
+        available_coaching_core = [c for c in core_coaching_cols if c in coaching_df.columns]
+        if not available_coaching_core:
+            available_coaching_core = ["agent_id", "hidden_score", "risk", "performance_score"]
+        render_simple_table(coaching_df[available_coaching_core], locale)
+        
+        # --- Expander: Coaching Plan Details ---
+        expander_coaching_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "why_this_coaching", "manager_note", "target_metric", "target_date", "expected_improvement"]
+        available_coaching_expander = [c for c in expander_coaching_cols if c in coaching_df.columns]
+        if not coaching_df.empty and available_coaching_expander:
+            with st.expander(t(locale, "coaching.expander_plan_details")):
+                render_simple_table(coaching_df[available_coaching_expander], locale)
+
+        # --- DeepSeek Manager Coaching Summary ---
+        from apps.streamlit_group_training.services.llm_service import (
+            build_agent_coaching_prompt, get_llm_or_fallback, llm_enabled
+        )
+        if plans:
+            st.divider()
+            st.subheader(t(locale, "llm.manager_coaching_title"))
+            if not llm_enabled():
+                st.caption(t(locale, "llm.api_disabled"))
+            else:
+                # Only coach the first high-risk or first plan
+                target_plan = next(
+                    (p for p in plans if p["metrics"].get("latest_risk") == "High"),
+                    plans[0]
+                )
+                cache_key = f"llm_manager_coaching_{user.id}_{target_plan.get('agent_id', '')}"
+                if cache_key not in st.session_state:
+                    with st.spinner(t(locale, "llm.generating")):
+                        # Create a minimal agent-like object without hidden score
+                        class _AgentProxy:
+                            def __init__(self, plan):
+                                self.name = plan.get("agent_label", plan.get("agent_id", "Agent"))
+                                self.id = plan.get("agent_id", "")
+                        prompt = build_agent_coaching_prompt(
+                            _AgentProxy(target_plan),
+                            target_plan.get("performance"),
+                            target_plan.get("coaching"),
+                        )
+                        text, used_llm = get_llm_or_fallback(
+                            prompt,
+                            t(locale, target_plan.get("manager_note_key", "coaching.manager_note.activity_gap"))
+                        )
+                        st.session_state[cache_key] = (text, used_llm)
+                text, used_llm = st.session_state[cache_key]
+                if text:
+                    st.info(text)
+                if not used_llm:
+                    st.caption(t(locale, "llm.fallback_notice"))
 
 
 def manager_dashboard_page(user, locale: str) -> None:
@@ -1998,6 +2275,52 @@ def manager_dashboard_page(user, locale: str) -> None:
         opportunity_map,
     )
 
+    # --- DeepSeek Manager Briefing ---
+    from apps.streamlit_group_training.services.llm_service import (
+        build_manager_briefing_prompt, get_llm_or_fallback, llm_enabled
+    )
+    if not llm_enabled():
+        st.caption(t(locale, "llm.api_disabled"))
+    else:
+        cache_key = f"llm_manager_briefing_{user.id}"
+        if cache_key not in st.session_state:
+            with st.spinner(t(locale, "llm.generating")):
+                risk_agent_ids = metrics.get("risk_agent_ids", [])
+                risk_agents_info = [
+                    {"id": aid, "name": agent_display_name(repo, aid)}
+                    for aid in risk_agent_ids
+                ]
+                top_opps = [
+                    {"customer": c.name, "stage": c.stage.value, "score": opportunity_map[c.id].opportunity_score}
+                    for c in customers
+                    if c.id in opportunity_map
+                ][:5]
+                prompt = build_manager_briefing_prompt(metrics, risk_agents_info, top_opps)
+                text, used_llm = get_llm_or_fallback(
+                    prompt,
+                    t(locale, "manager_insight.recommendation." + coaching_plans[0]["metrics"].get("issue", "activity_gap"))
+                    if coaching_plans else t(locale, "manager_insight.recommendation.balanced_pipeline")
+                )
+                st.session_state[cache_key] = (text, used_llm)
+        text, used_llm = st.session_state[cache_key]
+        if text:
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            briefing_lines = [l for l in lines if l.startswith("Briefing:") or l.startswith("簡報:")]
+            bottleneck_lines = [l for l in lines if l.startswith("Bottleneck:") or l.startswith("瓶頸:")]
+            priority_lines = [l for l in lines if l.startswith("Priority:") or l.startswith("優先行動:")]
+            b_col1, b_col2, b_col3 = st.columns(3)
+            with b_col1:
+                st.markdown(f"**{t(locale, 'llm.manager_briefing_title')}**")
+                st.info((briefing_lines[0].split(":", 1)[-1].strip() if briefing_lines else lines[0]) if lines else "—")
+            with b_col2:
+                st.markdown(f"**{t(locale, 'llm.manager_bottleneck_title')}**")
+                st.warning((bottleneck_lines[0].split(":", 1)[-1].strip() if bottleneck_lines else (lines[1] if len(lines) > 1 else "—")))
+            with b_col3:
+                st.markdown(f"**{t(locale, 'llm.manager_priority_title')}**")
+                st.success((priority_lines[0].split(":", 1)[-1].strip() if priority_lines else (lines[2] if len(lines) > 2 else "—")))
+        if not used_llm:
+            st.caption(t(locale, "llm.fallback_notice"))
+
     chart_col_1, chart_col_2 = st.columns(2)
     logs_df = daily_logs_to_dataframe(dashboard["daily_logs"])
     if not logs_df.empty:
@@ -2027,7 +2350,17 @@ def manager_dashboard_page(user, locale: str) -> None:
     team_col.markdown(t(locale, "dashboard.risk_agents"))
     render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
     team_col.markdown(t(locale, "coaching.title"))
-    render_simple_table(coaching_plan_to_dataframe(coaching_plans, locale), locale, team_col)
+    # --- Dashboard Coaching Summary: 4 core columns ---
+    dash_coaching_df = coaching_plan_to_dataframe(coaching_plans, locale)
+    dash_core_cols = ["agent_id", "hidden_score", "risk", "performance_score"]
+    dash_available_core = [c for c in dash_core_cols if c in dash_coaching_df.columns]
+    render_simple_table(dash_coaching_df[dash_available_core], locale, team_col)
+    # --- Expander: full coaching plan ---
+    dash_expander_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "manager_note", "target_metric", "target_date", "expected_improvement"]
+    dash_available_expander = [c for c in dash_expander_cols if c in dash_coaching_df.columns]
+    if not dash_coaching_df.empty and dash_available_expander:
+        with team_col.expander(t(locale, "coaching.expander_plan_details")):
+            render_simple_table(dash_coaching_df[dash_available_expander], locale)
 
     score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
