@@ -2093,25 +2093,26 @@ def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: s
     core_cols = ["customer", "stage", "agent_id", "opportunity_score", "priority"]
     available_core = [c for c in core_cols if c in high_potential_df.columns]
     render_simple_table(high_potential_df[available_core], locale, insight_col_1)
-    
-    # Expander for AI details
-    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
-    available_expander = [c for c in expander_cols if c in high_potential_df.columns]
-    if not high_potential_df.empty and available_expander:
-        with insight_col_1.expander(t(locale, "crm.expander_ai_details")):
-            render_simple_table(high_potential_df[available_expander], locale)
 
     # Followup customers - max 5 core columns
     followup_df = customers_to_dataframe(insights["followup_customers"], locale, repo)
     insight_col_2.markdown(t(locale, "training.followup_customers"))
     followup_core = [c for c in core_cols if c in followup_df.columns]
     render_simple_table(followup_df[followup_core], locale, insight_col_2)
-    
-    # Expander for AI details
-    followup_expander = [c for c in expander_cols if c in followup_df.columns]
-    if not followup_df.empty and followup_expander:
-        with insight_col_2.expander(t(locale, "crm.expander_ai_details")):
-            render_simple_table(followup_df[followup_expander], locale)
+
+    # ── Single AI detail expander below both tables ──────────────────
+    expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
+    combined_ai_df = pd.concat(
+        [
+            df[[c for c in expander_cols if c in df.columns]]
+            for df in [high_potential_df, followup_df]
+            if not df.empty
+        ],
+        ignore_index=True,
+    ).drop_duplicates(subset=["customer"] if "customer" in expander_cols else None)
+    if not combined_ai_df.empty:
+        with st.expander(t(locale, "crm.expander_ai_details")):
+            render_simple_table(combined_ai_df, locale)
 
     if user.role == UserRole.AGENT:
         st.caption(t(locale, "training.agent_activity_reminder", risk=translated_risk(locale, insights["latest_risk"])))
