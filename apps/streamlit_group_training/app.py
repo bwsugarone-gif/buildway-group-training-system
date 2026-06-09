@@ -617,23 +617,23 @@ def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart
     )
 
 
-def hidden_score_bar_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart:
-    """Vertical bar chart sorted high-to-low (P2 requirement)."""
+def hidden_score_risk_donut_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart:
+    """Hidden score risk distribution donut chart with count and percentage."""
     if score_summary_df.empty:
-        return alt.Chart(pd.DataFrame({"agent_id": [], "average_hidden_score": []})).mark_bar()
-    sorted_df = score_summary_df.sort_values("average_hidden_score", ascending=False).reset_index(drop=True)
-    agent_order = sorted_df["agent_id"].tolist()
+        empty_df = pd.DataFrame([{"risk_hint": t(locale, "hidden_score.risk_low"), "count": 0, "label": "0 (0%)"}])
+        return donut_chart(empty_df, "risk_hint", "count", t(locale, "dashboard.chart_risk_dist"))
+    risk_counts = score_summary_df["risk_hint"].value_counts().reset_index()
+    risk_counts.columns = ["risk_hint", "count"]
+    total = risk_counts["count"].sum()
+    risk_counts["label"] = risk_counts.apply(
+        lambda r: f"{r['risk_hint']}：{r['count']}人（{r['count']/total*100:.0f}%）" if total > 0 else f"{r['risk_hint']}：0人（0%）",
+        axis=1,
+    )
     return (
-        alt.Chart(sorted_df)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        alt.Chart(risk_counts)
+        .mark_arc(innerRadius=55, outerRadius=100)
         .encode(
-            x=alt.X("agent_id:N", title=None, sort=agent_order, axis=alt.Axis(labelAngle=-30, labelLimit=120)),
-            y=alt.Y(
-                "average_hidden_score:Q",
-                title=None,
-                scale=alt.Scale(domain=[0, 100]),
-                axis=alt.Axis(values=[0, 25, 50, 75, 100], grid=True),
-            ),
+            theta=alt.Theta("count:Q"),
             color=alt.Color(
                 "risk_hint:N",
                 title=None,
@@ -646,20 +646,19 @@ def hidden_score_bar_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.C
                     ],
                     range=["#16a34a", "#f59e0b", "#dc2626", "#7f1d1d"],
                 ),
-                legend=alt.Legend(orient="bottom"),
+                legend=alt.Legend(orient="bottom", columns=2),
             ),
             tooltip=[
-                alt.Tooltip("agent_id:N", title=t(locale, "column.agent_id")),
-                alt.Tooltip("average_hidden_score:Q", title=t(locale, "column.average_hidden_score"), format=".1f"),
-                alt.Tooltip("risk_hint:N", title=t(locale, "column.risk_hint")),
+                alt.Tooltip("label:N", title=t(locale, "column.risk_hint")),
+                alt.Tooltip("count:Q", title=t(locale, "column.value")),
             ],
         )
-        .properties(height=300)
+        .properties(title=t(locale, "dashboard.chart_risk_dist"), height=260)
     )
 
 
-def funnel_chart(logs, locale: str) -> alt.Chart:
-    """Sales funnel chart showing outreach→appointment→meeting→closing with conversion rates."""
+def funnel_donut_chart(logs, locale: str) -> alt.Chart:
+    """Sales funnel donut showing outreach/appointment/meeting/closing with count and percentage."""
     if not logs:
         total_outreach = total_appts = total_meetings = total_closings = 0
     else:
@@ -668,53 +667,41 @@ def funnel_chart(logs, locale: str) -> alt.Chart:
         total_meetings = sum(getattr(l, "meeting_count", 0) for l in logs)
         total_closings = sum(getattr(l, "closing_count", 0) for l in logs)
 
-    stage_labels = [
-        t(locale, "stage.Cold"),      # 接觸
-        t(locale, "daily.appointment_count").replace("數", "").strip() or "預約",
-        t(locale, "daily.meeting_count").replace("數", "").strip() or "見客",
-        t(locale, "daily.closing_count").replace("數", "").strip() or "成交",
-    ]
-    counts = [total_outreach, total_appts, total_meetings, total_closings]
-    # Use cleaner labels
     stage_display = ["接觸", "預約", "見客", "成交"] if locale == "zh_HK" else ["Outreach", "Appt", "Meeting", "Closing"]
+    counts = [total_outreach, total_appts, total_meetings, total_closings]
+    total = sum(counts)
 
-    def conv_rate(numer, denom):
-        if denom == 0:
-            return "—"
-        return f"{numer / denom * 100:.0f}%"
+    def label(name, count):
+        pct = f"{count/total*100:.0f}%" if total > 0 else "0%"
+        return f"{name}：{count}（{pct}）"
 
-    rates = [
-        "100%",
-        conv_rate(total_appts, total_outreach),
-        conv_rate(total_meetings, total_appts),
-        conv_rate(total_closings, total_meetings),
-    ]
-    funnel_df = pd.DataFrame({
-        "stage": stage_display,
-        "count": counts,
-        "rate": rates,
-        "order": list(range(4)),
-    })
+    funnel_df = pd.DataFrame([
+        {"stage": stage_display[i], "count": counts[i], "label": label(stage_display[i], counts[i])}
+        for i in range(4)
+        if counts[i] > 0
+    ])
+    if funnel_df.empty:
+        funnel_df = pd.DataFrame([{"stage": stage_display[0], "count": 0, "label": label(stage_display[0], 0)}])
     return (
         alt.Chart(funnel_df)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .mark_arc(innerRadius=55, outerRadius=100)
         .encode(
-            x=alt.X("stage:N", title=None, sort=stage_display, axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("count:Q", title=None, axis=alt.Axis(tickMinStep=1, grid=True)),
+            theta=alt.Theta("count:Q"),
             color=alt.Color(
                 "stage:N",
                 title=None,
-                sort=stage_display,
-                scale=alt.Scale(range=["#2563eb", "#16a34a", "#f59e0b", "#dc2626"]),
-                legend=None,
+                scale=alt.Scale(
+                    domain=stage_display,
+                    range=["#2563eb", "#16a34a", "#f59e0b", "#dc2626"],
+                ),
+                legend=alt.Legend(orient="bottom", columns=2),
             ),
             tooltip=[
-                alt.Tooltip("stage:N", title=t(locale, "dashboard.funnel_stage")),
+                alt.Tooltip("label:N", title=t(locale, "dashboard.funnel_stage")),
                 alt.Tooltip("count:Q", title=t(locale, "dashboard.funnel_count")),
-                alt.Tooltip("rate:N", title=t(locale, "dashboard.funnel_rate")),
             ],
         )
-        .properties(height=260)
+        .properties(title=t(locale, "dashboard.funnel_title"), height=260)
     )
 
 
@@ -2477,7 +2464,7 @@ def manager_dashboard_page(user, locale: str) -> None:
     # --- Funnel Chart + Hidden Score Bar Chart ---
     funnel_col, hbar_col = st.columns(2)
     funnel_col.markdown(f"**{t(locale, 'dashboard.funnel_title')}**")
-    funnel_col.altair_chart(funnel_chart(dashboard["daily_logs"], locale), use_container_width=True)
+    funnel_col.altair_chart(funnel_donut_chart(dashboard["daily_logs"], locale), use_container_width=True)
 
     scores_df = pd.DataFrame(
         [
@@ -2492,11 +2479,11 @@ def manager_dashboard_page(user, locale: str) -> None:
         columns=["date", "agent_id", "hidden_score", "rationale"],
     )
     score_summary_df = hidden_score_summary(scores_df, locale)
-    hbar_col.markdown(f"**{t(locale, 'dashboard.hidden_score_bar_title')}**")
+    hbar_col.markdown(f"**{t(locale, 'dashboard.chart_risk_dist')}**")
     if not score_summary_df.empty:
         average_score = score_summary_df["average_hidden_score"].mean()
         hbar_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
-        hbar_col.altair_chart(hidden_score_bar_chart(score_summary_df, locale), use_container_width=True)
+        hbar_col.altair_chart(hidden_score_risk_donut_chart(score_summary_df, locale), use_container_width=True)
     else:
         hbar_col.info(t(locale, "dashboard.no_score_data"))
 
