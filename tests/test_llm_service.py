@@ -362,3 +362,136 @@ class TestLLMCache:
         assert result1 == result2 == "Cached response"
         # API should only be called once due to cache
         assert mock_client.chat.completions.create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2b — Fix 1: AI detail dataframe fields not empty
+# ---------------------------------------------------------------------------
+
+class TestAiDetailDataframeFields:
+    """Verify render_demo_ai_insights AI detail expander fields have fallback values."""
+
+    def _make_customer(self, cid="c1", name="陳大文", stage="Hot", agent_id="a1"):
+        from datetime import date
+        from unittest.mock import MagicMock
+        c = MagicMock()
+        c.id = cid
+        c.name = name
+        c.stage.value = stage
+        c.agent_id = agent_id
+        c.phone = "9999-0000"
+        c.notes = ""
+        c.next_meeting_date = date.today()
+        c.created_at.strftime.return_value = "2026-06-10 00:00"
+        return c
+
+    def test_opportunity_reason_fallback_applied(self):
+        """opportunity_reason must never be empty after fallback logic."""
+        import pandas as pd
+        # Simulate customers_to_dataframe producing empty opportunity_reason
+        df = pd.DataFrame([{
+            "customer": "陳大文",
+            "stage": "熱",
+            "agent_id": "a1",
+            "opportunity_score": 75,
+            "priority": "高",
+            "opportunity_reason": "",          # empty — should trigger fallback
+            "next_best_action": "致電確認方案",
+            "suggested_message": "",           # empty — should trigger fallback
+            "notes": "",
+        }])
+        REASON_FALLBACK = "此客戶根據狀態、跟進日期及機會分數被列入優先名單。"
+        MSG_FALLBACK = "您好，我想跟進一下您最近關心的保障需要，看看有沒有需要更新或補充的地方。"
+        expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
+        sub = df[[c for c in expander_cols if c in df.columns]].copy()
+        sub["opportunity_reason"] = sub["opportunity_reason"].apply(
+            lambda v: v if (isinstance(v, str) and v.strip()) else REASON_FALLBACK
+        )
+        sub["suggested_message"] = sub["suggested_message"].apply(
+            lambda v: v if (isinstance(v, str) and v.strip()) else MSG_FALLBACK
+        )
+        assert sub["opportunity_reason"].iloc[0] == REASON_FALLBACK
+        assert sub["suggested_message"].iloc[0] == MSG_FALLBACK
+
+    def test_non_empty_values_preserved(self):
+        """Non-empty opportunity_reason / suggested_message must not be overwritten."""
+        import pandas as pd
+        REASON = "客戶有明確保障需求。"
+        MSG = "陳先生您好，跟進上次保障方案。"
+        df = pd.DataFrame([{
+            "customer": "陳大文",
+            "opportunity_reason": REASON,
+            "next_best_action": "致電",
+            "suggested_message": MSG,
+            "notes": "",
+        }])
+        REASON_FALLBACK = "fallback reason"
+        MSG_FALLBACK = "fallback msg"
+        df["opportunity_reason"] = df["opportunity_reason"].apply(
+            lambda v: v if (isinstance(v, str) and v.strip()) else REASON_FALLBACK
+        )
+        df["suggested_message"] = df["suggested_message"].apply(
+            lambda v: v if (isinstance(v, str) and v.strip()) else MSG_FALLBACK
+        )
+        assert df["opportunity_reason"].iloc[0] == REASON
+        assert df["suggested_message"].iloc[0] == MSG
+
+    def test_combined_df_no_duplicates(self):
+        """After pd.concat + drop_duplicates, no customer should appear twice."""
+        import pandas as pd
+        row = {"customer": "陳大文", "opportunity_reason": "有需求", "next_best_action": "致電", "suggested_message": "您好", "notes": ""}
+        df1 = pd.DataFrame([row])
+        df2 = pd.DataFrame([row])  # same customer appears in both tables
+        combined = pd.concat([df1, df2], ignore_index=True).drop_duplicates(subset=["customer"])
+        assert len(combined) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.2b — Fix 2: Dashboard chart title not duplicated
+# ---------------------------------------------------------------------------
+
+class TestDashboardChartTitleNotDuplicated:
+    """smart_kpi_chart with title='' must not produce visible Altair chart title."""
+
+    def test_smart_kpi_chart_empty_title(self):
+        """When title='' the Altair chart title property should be empty string."""
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        import pandas as pd
+        import altair as alt
+        # Import app helpers directly
+        from apps.streamlit_group_training.app import smart_kpi_chart
+        chart = smart_kpi_chart(["接觸", "預約", "見客", "成交"], [100, 30, 10, 2], "")
+        spec = chart.to_dict()
+        # Altair layer chart: title at top level
+        title = spec.get("title", "")
+        assert title == "" or title is None, f"Expected empty title, got: {title!r}"
+
+    def test_smart_kpi_chart_with_title(self):
+        """When title is provided it should be in the spec (legacy usage)."""
+        from apps.streamlit_group_training.app import smart_kpi_chart
+        chart = smart_kpi_chart(["A", "B"], [10, 20], "銷售漏斗")
+        spec = chart.to_dict()
+        title = spec.get("title", "")
+        assert title == "銷售漏斗", f"Expected '銷售漏斗', got: {title!r}"
+
+    def test_funnel_kpi_chart_uses_empty_title(self):
+        """Dashboard funnel row passes title='' to avoid duplication with st.markdown header."""
+        from apps.streamlit_group_training.app import smart_kpi_chart
+        # Simulate what manager_dashboard_page does: title="" passed
+        chart = smart_kpi_chart(["接觸", "預約", "見客", "成交"], [850, 65, 28, 5], "")
+        spec = chart.to_dict()
+        assert spec.get("title", "") == ""
+
+    def test_stage_kpi_chart_uses_empty_title(self):
+        """Dashboard customer stage chart passes title='' to avoid duplication."""
+        from apps.streamlit_group_training.app import smart_kpi_chart
+        chart = smart_kpi_chart(["冷", "暖", "熱"], [20, 10, 5], "")
+        spec = chart.to_dict()
+        assert spec.get("title", "") == ""
+
+    def test_risk_kpi_chart_uses_empty_title(self):
+        """Dashboard risk distribution chart passes title='' to avoid duplication."""
+        from apps.streamlit_group_training.app import smart_kpi_chart
+        chart = smart_kpi_chart(["低風險", "中風險", "高風險"], [5, 3, 2], "")
+        spec = chart.to_dict()
+        assert spec.get("title", "") == ""

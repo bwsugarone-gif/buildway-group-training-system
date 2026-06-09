@@ -2102,14 +2102,36 @@ def render_demo_ai_insights(repo: SQLiteGroupTrainingRepository, user, locale: s
 
     # ── Single AI detail expander below both tables ──────────────────
     expander_cols = ["customer", "opportunity_reason", "next_best_action", "suggested_message", "notes"]
-    combined_ai_df = pd.concat(
-        [
-            df[[c for c in expander_cols if c in df.columns]]
-            for df in [high_potential_df, followup_df]
-            if not df.empty
-        ],
-        ignore_index=True,
-    ).drop_duplicates(subset=["customer"] if "customer" in expander_cols else None)
+    _REASON_FALLBACK = (
+        "此客戶根據狀態、跟進日期及機會分數被列入優先名單。"
+        if locale == "zh_HK"
+        else "This customer was prioritised based on stage, follow-up date and opportunity score."
+    )
+    _MSG_FALLBACK = (
+        "您好，我想跟進一下您最近關心的保障需要，看看有沒有需要更新或補充的地方。"
+        if locale == "zh_HK"
+        else "Hi, I'd like to follow up on your recent coverage needs and see if there's anything to update or add."
+    )
+    frames = []
+    for df in [high_potential_df, followup_df]:
+        if df.empty:
+            continue
+        sub = df[[c for c in expander_cols if c in df.columns]].copy()
+        # Apply fallbacks for empty fields
+        if "opportunity_reason" in sub.columns:
+            sub["opportunity_reason"] = sub["opportunity_reason"].apply(
+                lambda v: v if (isinstance(v, str) and v.strip()) else _REASON_FALLBACK
+            )
+        if "suggested_message" in sub.columns:
+            sub["suggested_message"] = sub["suggested_message"].apply(
+                lambda v: v if (isinstance(v, str) and v.strip()) else _MSG_FALLBACK
+            )
+        frames.append(sub)
+    combined_ai_df = (
+        pd.concat(frames, ignore_index=True).drop_duplicates(subset=["customer"])
+        if frames
+        else pd.DataFrame(columns=expander_cols)
+    )
     if not combined_ai_df.empty:
         with st.expander(t(locale, "crm.expander_ai_details")):
             render_simple_table(combined_ai_df, locale)
@@ -2481,7 +2503,8 @@ def manager_dashboard_page(user, locale: str) -> None:
     funnel_labels = ["接觸", "預約", "見客", "成交"] if locale == "zh_HK" else ["Outreach", "Appt", "Meeting", "Closing"]
     funnel_values = [total_outreach, total_appts, total_meetings, total_closings]
     funnel_colors = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626"]
-    st.altair_chart(smart_kpi_chart(funnel_labels, funnel_values, t(locale, "dashboard.funnel_title"), funnel_colors), use_container_width=True)
+    # title="" avoids duplicate: outer st.markdown already shows the title
+    st.altair_chart(smart_kpi_chart(funnel_labels, funnel_values, "", funnel_colors), use_container_width=True)
 
     # ── Row 3: 客戶階段分佈 KPI Chart ───────────────────────────────────
     st.markdown(f"**{t(locale, 'dashboard.chart_stage_dist')}**")
@@ -2493,7 +2516,7 @@ def manager_dashboard_page(user, locale: str) -> None:
         stage_labels = [s for s in stage_order if stage_counts.get(s, 0) > 0]
         stage_values = [stage_counts[s] for s in stage_labels]
         stage_colors = ["#64748b", "#f59e0b", "#ef4444", "#7c3aed", "#16a34a", "#94a3b8"]
-        st.altair_chart(smart_kpi_chart(stage_labels, stage_values, t(locale, "dashboard.chart_stage_dist"), stage_colors), use_container_width=True)
+        st.altair_chart(smart_kpi_chart(stage_labels, stage_values, "", stage_colors), use_container_width=True)
     else:
         st.info(t(locale, "dashboard.no_customer_data"))
 
@@ -2526,7 +2549,7 @@ def manager_dashboard_page(user, locale: str) -> None:
         risk_values = [int(risk_counts_series.get(r, 0)) for r in risk_labels]
         risk_colors = ["#16a34a", "#f59e0b", "#dc2626", "#7f1d1d"]
         if risk_labels:
-            st.altair_chart(smart_kpi_chart(risk_labels, risk_values, t(locale, "dashboard.chart_risk_dist"), risk_colors), use_container_width=True)
+            st.altair_chart(smart_kpi_chart(risk_labels, risk_values, "", risk_colors), use_container_width=True)
     else:
         st.info(t(locale, "dashboard.no_score_data"))
 
