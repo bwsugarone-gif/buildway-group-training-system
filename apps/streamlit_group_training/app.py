@@ -499,7 +499,7 @@ def chart_color_range() -> list[str]:
 
 
 def donut_chart(chart_df: pd.DataFrame, label_col: str, value_col: str, title: str) -> alt.Chart:
-    """Reusable donut chart helper for manager dashboard."""
+    """Reusable donut chart helper (kept for backward compat, not used in dashboard)."""
     return (
         alt.Chart(chart_df)
         .mark_arc(innerRadius=55, outerRadius=100)
@@ -520,24 +520,59 @@ def donut_chart(chart_df: pd.DataFrame, label_col: str, value_col: str, title: s
     )
 
 
-def activity_donut_chart(logs_df: pd.DataFrame, locale: str) -> alt.Chart:
-    """活動分佈 donut chart（通話/WhatsApp/預約/會議/成交）"""
-    totals = logs_df[["calls", "whatsapp", "appointments", "meetings", "closings"]].sum()
-    label_map = {
-        "calls": t(locale, "column.calls"),
-        "whatsapp": t(locale, "column.whatsapp"),
-        "appointments": t(locale, "column.appointments"),
-        "meetings": t(locale, "column.meetings"),
-        "closings": t(locale, "column.closings"),
-    }
-    chart_df = pd.DataFrame([
-        {"activity": label_map[k], "count": int(v)}
-        for k, v in totals.items()
-        if int(v) > 0
-    ])
-    if chart_df.empty:
-        chart_df = pd.DataFrame([{"activity": label_map["calls"], "count": 0}])
-    return donut_chart(chart_df, "activity", "count", t(locale, "dashboard.chart_activity_funnel"))
+def smart_kpi_chart(labels: list[str], values: list[int], title: str, colors: list[str] | None = None) -> alt.Chart:
+    """Adaptive Business KPI Vertical Chart — Infographic style.
+    Each bar shows: label (top), value (mid), percentage (bottom).
+    No donut/pie. Clean vertical columns with annotation.
+    """
+    total = sum(values) if values else 1
+    _colors = colors or ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#64748b"]
+    rows = []
+    for i, (label, val) in enumerate(zip(labels, values)):
+        pct = val / total * 100 if total > 0 else 0
+        rows.append({
+            "label": label,
+            "value": val,
+            "pct": round(pct, 1),
+            "pct_label": f"{pct:.0f}%",
+            "display": f"{val:,}",
+            "color": _colors[i % len(_colors)],
+            "order": i,
+        })
+    df = pd.DataFrame(rows)
+    bars = (
+        alt.Chart(df)
+        .mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5, size=52)
+        .encode(
+            x=alt.X("label:N", title=None, sort=labels, axis=alt.Axis(labelAngle=0, labelFontSize=13, labelFontWeight="bold")),
+            y=alt.Y("value:Q", title=None, axis=alt.Axis(grid=True, tickMinStep=1)),
+            color=alt.Color("color:N", scale=None, legend=None),
+            tooltip=[
+                alt.Tooltip("label:N", title=title),
+                alt.Tooltip("display:N", title="數量" if any("\u4e00" <= c <= "\u9fff" for c in title) else "Count"),
+                alt.Tooltip("pct_label:N", title="佔比" if any("\u4e00" <= c <= "\u9fff" for c in title) else "Share"),
+            ],
+        )
+    )
+    value_text = (
+        alt.Chart(df)
+        .mark_text(dy=-22, fontSize=15, fontWeight="bold", color="#1e293b")
+        .encode(
+            x=alt.X("label:N", sort=labels),
+            y=alt.Y("value:Q"),
+            text=alt.Text("display:N"),
+        )
+    )
+    pct_text = (
+        alt.Chart(df)
+        .mark_text(dy=-8, fontSize=12, color="#64748b")
+        .encode(
+            x=alt.X("label:N", sort=labels),
+            y=alt.Y("value:Q"),
+            text=alt.Text("pct_label:N"),
+        )
+    )
+    return (bars + value_text + pct_text).properties(title=title, height=260)
 
 
 def stage_chart(customers, locale: str) -> alt.Chart:
@@ -2432,40 +2467,36 @@ def manager_dashboard_page(user, locale: str) -> None:
         if not used_llm:
             st.caption(t(locale, "llm.fallback_notice"))
 
-    chart_col_1, chart_col_2 = st.columns(2)
-    logs_df = daily_logs_to_dataframe(dashboard["daily_logs"])
-    if not logs_df.empty:
-        chart_col_1.markdown(t(locale, "dashboard.chart_activity_funnel"))
-        chart_col_1.altair_chart(activity_donut_chart(logs_df, locale), use_container_width=True)
+    # ── Row 2: 銷售漏斗 KPI Chart ───────────────────────────────────────
+    st.markdown(f"**{t(locale, 'dashboard.funnel_title')}**")
+    logs = dashboard["daily_logs"]
+    if logs:
+        total_outreach = sum(getattr(l, "call_count", 0) + getattr(l, "whatsapp_count", 0) for l in logs)
+        total_appts = sum(getattr(l, "appointment_count", 0) for l in logs)
+        total_meetings = sum(getattr(l, "meeting_count", 0) for l in logs)
+        total_closings = sum(getattr(l, "closing_count", 0) for l in logs)
     else:
-        chart_col_1.info(t(locale, "dashboard.no_daily_log_data"))
+        total_outreach = total_appts = total_meetings = total_closings = 0
+    funnel_labels = ["接觸", "預約", "見客", "成交"] if locale == "zh_HK" else ["Outreach", "Appt", "Meeting", "Closing"]
+    funnel_values = [total_outreach, total_appts, total_meetings, total_closings]
+    funnel_colors = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626"]
+    st.altair_chart(smart_kpi_chart(funnel_labels, funnel_values, t(locale, "dashboard.funnel_title"), funnel_colors), use_container_width=True)
 
+    # ── Row 3: 客戶階段分佈 KPI Chart ───────────────────────────────────
+    st.markdown(f"**{t(locale, 'dashboard.chart_stage_dist')}**")
     if customers:
-        # Stage distribution donut
         stage_order = [translated_stage(locale, s.value) for s in CustomerStage]
-        stage_df = (
-            pd.Series([translated_stage(locale, c.stage.value) for c in customers])
-            .value_counts()
-            .reindex(stage_order, fill_value=0)
-            .reset_index()
-        )
-        stage_df.columns = ["stage", "count"]
-        stage_df = stage_df[stage_df["count"] > 0]
-        if stage_df.empty:
-            stage_df = pd.DataFrame([{"stage": stage_order[0], "count": 0}])
-        chart_col_2.markdown(t(locale, "dashboard.chart_stage_dist"))
-        chart_col_2.altair_chart(
-            donut_chart(stage_df, "stage", "count", t(locale, "dashboard.chart_stage_dist")),
-            use_container_width=True,
-        )
+        stage_counts = {s: 0 for s in stage_order}
+        for c in customers:
+            stage_counts[translated_stage(locale, c.stage.value)] = stage_counts.get(translated_stage(locale, c.stage.value), 0) + 1
+        stage_labels = [s for s in stage_order if stage_counts.get(s, 0) > 0]
+        stage_values = [stage_counts[s] for s in stage_labels]
+        stage_colors = ["#64748b", "#f59e0b", "#ef4444", "#7c3aed", "#16a34a", "#94a3b8"]
+        st.altair_chart(smart_kpi_chart(stage_labels, stage_values, t(locale, "dashboard.chart_stage_dist"), stage_colors), use_container_width=True)
     else:
-        chart_col_2.info(t(locale, "dashboard.no_customer_data"))
+        st.info(t(locale, "dashboard.no_customer_data"))
 
-    # --- Funnel Chart + Hidden Score Bar Chart ---
-    funnel_col, hbar_col = st.columns(2)
-    funnel_col.markdown(f"**{t(locale, 'dashboard.funnel_title')}**")
-    funnel_col.altair_chart(funnel_donut_chart(dashboard["daily_logs"], locale), use_container_width=True)
-
+    # ── Row 4: 風險代理分佈 KPI Chart ──────────────────────────────────
     scores_df = pd.DataFrame(
         [
             {
@@ -2479,13 +2510,24 @@ def manager_dashboard_page(user, locale: str) -> None:
         columns=["date", "agent_id", "hidden_score", "rationale"],
     )
     score_summary_df = hidden_score_summary(scores_df, locale)
-    hbar_col.markdown(f"**{t(locale, 'dashboard.chart_risk_dist')}**")
+    st.markdown(f"**{t(locale, 'dashboard.chart_risk_dist')}**")
     if not score_summary_df.empty:
         average_score = score_summary_df["average_hidden_score"].mean()
-        hbar_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
-        hbar_col.altair_chart(hidden_score_risk_donut_chart(score_summary_df, locale), use_container_width=True)
+        st.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
+        risk_counts_series = score_summary_df["risk_hint"].value_counts()
+        risk_domain = [
+            t(locale, "hidden_score.risk_low"),
+            t(locale, "hidden_score.risk_medium"),
+            t(locale, "hidden_score.risk_high"),
+            t(locale, "hidden_score.risk_critical"),
+        ]
+        risk_labels = [r for r in risk_domain if r in risk_counts_series.index]
+        risk_values = [int(risk_counts_series.get(r, 0)) for r in risk_labels]
+        risk_colors = ["#16a34a", "#f59e0b", "#dc2626", "#7f1d1d"]
+        if risk_labels:
+            st.altair_chart(smart_kpi_chart(risk_labels, risk_values, t(locale, "dashboard.chart_risk_dist"), risk_colors), use_container_width=True)
     else:
-        hbar_col.info(t(locale, "dashboard.no_score_data"))
+        st.info(t(locale, "dashboard.no_score_data"))
 
     # --- Top Performer + Risk Ranking ---
     top_col, risk_col = st.columns(2)
