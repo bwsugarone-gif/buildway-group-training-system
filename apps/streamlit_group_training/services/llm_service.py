@@ -21,7 +21,6 @@ from typing import Any
 
 def _get_api_key() -> str | None:
     """Resolve DEEPSEEK_API_KEY from st.secrets or environment variable."""
-    # Try Streamlit secrets first (won't crash if not in Streamlit context)
     try:
         import streamlit as st
         key = st.secrets.get("DEEPSEEK_API_KEY", None)
@@ -65,16 +64,50 @@ def _get_client():
 
 
 # ---------------------------------------------------------------------------
-# System instruction: all responses must be in Traditional Chinese (HK)
+# System instruction: strict Traditional Chinese (HK) output
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "你是香港保險團隊培訓主管。\n"
+    "你是香港保險團隊培訓主管。\n\n"
     "所有輸出必須使用繁體中文。\n"
-    "禁止英文。\n"
-    "禁止簡體中文。\n"
-    "請使用香港保險行業用語回覆。"
+    "禁止使用英文標題。\n"
+    "禁止使用英文段落。\n"
+    "禁止使用簡體中文。\n"
+    "請使用香港保險行業常用語氣。\n"
+    "請以清晰、實用、可執行的條列方式回覆。"
 )
+
+# ---------------------------------------------------------------------------
+# Post-processing: replace any English headings with Traditional Chinese
+# ---------------------------------------------------------------------------
+
+_EN_TO_ZH_HEADINGS = {
+    "Today's Briefing:": "今日重點:",
+    "Today's Briefing": "今日重點",
+    "Main Bottleneck:": "主要瓶頸:",
+    "Main Bottleneck": "主要瓶頸",
+    "Priority Actions:": "優先行動:",
+    "Priority Actions": "優先行動",
+    "Coaching Insight:": "教練洞察:",
+    "Coaching Insight": "教練洞察",
+    "Action Steps:": "改善行動:",
+    "Action Steps": "改善行動",
+    "Follow-up Recommendation:": "跟進建議:",
+    "Follow-up Recommendation": "跟進建議",
+    "WhatsApp Opening:": "WhatsApp 開場句:",
+    "WhatsApp Opening": "WhatsApp 開場句",
+    "Coaching Analysis:": "教練洞察:",
+    "Coaching Analysis": "教練洞察",
+    "Today's Highlights:": "今日重點:",
+    "Today's Highlights": "今日重點",
+}
+
+
+def _enforce_chinese_headings(text: str) -> str:
+    """Replace common English headings with Traditional Chinese equivalents."""
+    for en, zh in _EN_TO_ZH_HEADINGS.items():
+        text = text.replace(en, zh)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +123,7 @@ def call_deepseek(prompt: str, fallback: str = "") -> str:
     - Simple in-process cache to avoid duplicate API calls within the same session
     - Falls back to `fallback` string on any error or missing key
     - Always prepends the HK Traditional Chinese system instruction
+    - Post-processes to replace any English headings with Traditional Chinese
     """
     api_key = _get_api_key()
     if not api_key:
@@ -111,6 +145,7 @@ def call_deepseek(prompt: str, fallback: str = "") -> str:
             temperature=0.7,
         )
         result = response.choices[0].message.content or ""
+        result = _enforce_chinese_headings(result)
         _llm_cache[ck] = result
         return result
     except Exception:
@@ -131,7 +166,6 @@ def build_customer_followup_prompt(customer: Any, opportunity_analysis: Any) -> 
     """
     stage = getattr(customer, "stage", None)
     stage_value = stage.value if hasattr(stage, "value") else str(stage)
-    # Map stage to Chinese for clarity
     stage_zh = {
         "Cold": "冷（新名單）",
         "Warm": "暖（有興趣）",
@@ -188,13 +222,15 @@ def build_agent_coaching_prompt(agent: Any, performance_analysis: Any, coaching_
         f"目前主要瓶頸：{problem_zh}\n"
         f"關鍵數據 — 預約率：{appt_rate:.1f}%、見客率：{meeting_rate:.1f}%、成交率：{closing_rate:.1f}%\n\n"
         "請提供：\n"
-        "1. 輔導洞察：用 2-3 句說明為何此代理人在這個階段遇到困難。\n"
-        "2. 本週行動建議：列出 2 個具體、可執行的改善步驟。\n\n"
+        "1. 教練洞察：用 2-3 句說明為何此代理人在這個階段遇到困難。\n"
+        "2. 改善行動：列出 2 個具體、可執行的改善步驟。\n"
+        "3. 跟進建議：主管下週應如何跟進此代理人。\n\n"
         "請以以下格式輸出：\n"
-        "輔導洞察: [你的分析]\n"
-        "行動建議:\n"
+        "教練洞察: [你的分析]\n"
+        "改善行動:\n"
         "- [步驟一]\n"
-        "- [步驟二]"
+        "- [步驟二]\n"
+        "跟進建議: [主管跟進方向]"
     )
 
 
@@ -251,7 +287,7 @@ def build_manager_briefing_prompt(
         "1. 今日重點：2-3 句總結今日團隊狀況，需包含具體數字。\n"
         "2. 主要瓶頸：1-2 句點出核心問題，如有高風險代理請點名。\n"
         "3. 優先行動：列出 3 個今日主管應執行的具體行動。\n\n"
-        "請以以下格式輸出：\n"
+        "必須使用以下格式輸出（繁體中文，不可使用英文）：\n"
         "今日重點: [簡報內容]\n"
         "主要瓶頸: [瓶頸說明]\n"
         "優先行動:\n"
