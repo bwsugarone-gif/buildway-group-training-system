@@ -498,11 +498,31 @@ def chart_color_range() -> list[str]:
     return ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#64748b"]
 
 
-def activity_chart(logs_df: pd.DataFrame, locale: str) -> alt.Chart:
-    activity_by_date = logs_df.groupby("date", as_index=False)[
-        ["calls", "whatsapp", "appointments", "meetings", "closings"]
-    ].sum()
-    chart_df = activity_by_date.melt("date", var_name="activity_type", value_name="count")
+def donut_chart(chart_df: pd.DataFrame, label_col: str, value_col: str, title: str) -> alt.Chart:
+    """Reusable donut chart helper for manager dashboard."""
+    return (
+        alt.Chart(chart_df)
+        .mark_arc(innerRadius=55, outerRadius=100)
+        .encode(
+            theta=alt.Theta(f"{value_col}:Q"),
+            color=alt.Color(
+                f"{label_col}:N",
+                title=None,
+                scale=alt.Scale(range=chart_color_range()),
+                legend=alt.Legend(orient="bottom", columns=2),
+            ),
+            tooltip=[
+                alt.Tooltip(f"{label_col}:N", title=label_col),
+                alt.Tooltip(f"{value_col}:Q", title=value_col),
+            ],
+        )
+        .properties(title=title, height=260)
+    )
+
+
+def activity_donut_chart(logs_df: pd.DataFrame, locale: str) -> alt.Chart:
+    """活動分佈 donut chart（通話/WhatsApp/預約/會議/成交）"""
+    totals = logs_df[["calls", "whatsapp", "appointments", "meetings", "closings"]].sum()
     label_map = {
         "calls": t(locale, "column.calls"),
         "whatsapp": t(locale, "column.whatsapp"),
@@ -510,30 +530,14 @@ def activity_chart(logs_df: pd.DataFrame, locale: str) -> alt.Chart:
         "meetings": t(locale, "column.meetings"),
         "closings": t(locale, "column.closings"),
     }
-    chart_df["activity_label"] = chart_df["activity_type"].map(label_map)
-    label_order = list(label_map.values())
-    return (
-        alt.Chart(chart_df)
-        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-        .encode(
-            x=alt.X("date:O", title=None, axis=alt.Axis(labelAngle=0, labelLimit=90)),
-            xOffset=alt.XOffset("activity_label:N", sort=label_order),
-            y=alt.Y("count:Q", title=None, axis=alt.Axis(grid=True, tickMinStep=1)),
-            color=alt.Color(
-                "activity_label:N",
-                title=None,
-                sort=label_order,
-                scale=alt.Scale(range=chart_color_range()[:5]),
-                legend=alt.Legend(orient="bottom", columns=3),
-            ),
-            tooltip=[
-                alt.Tooltip("date:O", title=t(locale, "column.date")),
-                alt.Tooltip("activity_label:N", title=t(locale, "chart.activity_type")),
-                alt.Tooltip("count:Q", title=t(locale, "chart.activity_count")),
-            ],
-        )
-        .properties(height=280)
-    )
+    chart_df = pd.DataFrame([
+        {"activity": label_map[k], "count": int(v)}
+        for k, v in totals.items()
+        if int(v) > 0
+    ])
+    if chart_df.empty:
+        chart_df = pd.DataFrame([{"activity": label_map["calls"], "count": 0}])
+    return donut_chart(chart_df, "activity", "count", t(locale, "dashboard.chart_activity_funnel"))
 
 
 def stage_chart(customers, locale: str) -> alt.Chart:
@@ -2444,14 +2448,29 @@ def manager_dashboard_page(user, locale: str) -> None:
     chart_col_1, chart_col_2 = st.columns(2)
     logs_df = daily_logs_to_dataframe(dashboard["daily_logs"])
     if not logs_df.empty:
-        chart_col_1.markdown(t(locale, "dashboard.daily_activity_trend"))
-        chart_col_1.altair_chart(activity_chart(logs_df, locale), use_container_width=True)
+        chart_col_1.markdown(t(locale, "dashboard.chart_activity_funnel"))
+        chart_col_1.altair_chart(activity_donut_chart(logs_df, locale), use_container_width=True)
     else:
         chart_col_1.info(t(locale, "dashboard.no_daily_log_data"))
 
     if customers:
-        chart_col_2.markdown(t(locale, "dashboard.customers_by_stage"))
-        chart_col_2.altair_chart(stage_chart(customers, locale), use_container_width=True)
+        # Stage distribution donut
+        stage_order = [translated_stage(locale, s.value) for s in CustomerStage]
+        stage_df = (
+            pd.Series([translated_stage(locale, c.stage.value) for c in customers])
+            .value_counts()
+            .reindex(stage_order, fill_value=0)
+            .reset_index()
+        )
+        stage_df.columns = ["stage", "count"]
+        stage_df = stage_df[stage_df["count"] > 0]
+        if stage_df.empty:
+            stage_df = pd.DataFrame([{"stage": stage_order[0], "count": 0}])
+        chart_col_2.markdown(t(locale, "dashboard.chart_stage_dist"))
+        chart_col_2.altair_chart(
+            donut_chart(stage_df, "stage", "count", t(locale, "dashboard.chart_stage_dist")),
+            use_container_width=True,
+        )
     else:
         chart_col_2.info(t(locale, "dashboard.no_customer_data"))
 
