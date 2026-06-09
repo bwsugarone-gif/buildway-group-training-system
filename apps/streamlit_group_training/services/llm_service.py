@@ -6,6 +6,7 @@ Rules:
 - LLM CANNOT modify scores, risk levels, or database records.
 - Agent role CANNOT see Hidden Score in any LLM prompt.
 - If DEEPSEEK_API_KEY is not set, all functions fall back to rule-based text gracefully.
+- All prompts instruct DeepSeek to reply in Traditional Chinese (Hong Kong insurance industry).
 """
 
 from __future__ import annotations
@@ -64,6 +65,19 @@ def _get_client():
 
 
 # ---------------------------------------------------------------------------
+# System instruction: all responses must be in Traditional Chinese (HK)
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = (
+    "你是香港保險團隊培訓主管。\n"
+    "所有輸出必須使用繁體中文。\n"
+    "禁止英文。\n"
+    "禁止簡體中文。\n"
+    "請使用香港保險行業用語回覆。"
+)
+
+
+# ---------------------------------------------------------------------------
 # Core DeepSeek caller
 # ---------------------------------------------------------------------------
 
@@ -75,6 +89,7 @@ def call_deepseek(prompt: str, fallback: str = "") -> str:
     - 30-second timeout
     - Simple in-process cache to avoid duplicate API calls within the same session
     - Falls back to `fallback` string on any error or missing key
+    - Always prepends the HK Traditional Chinese system instruction
     """
     api_key = _get_api_key()
     if not api_key:
@@ -88,7 +103,10 @@ def call_deepseek(prompt: str, fallback: str = "") -> str:
         client = _get_client()
         response = client.chat.completions.create(
             model="deepseek-chat",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
             max_tokens=512,
             temperature=0.7,
         )
@@ -100,67 +118,83 @@ def call_deepseek(prompt: str, fallback: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Prompt builders
+# Prompt builders — all in Traditional Chinese
 # ---------------------------------------------------------------------------
 
 def build_customer_followup_prompt(customer: Any, opportunity_analysis: Any) -> str:
     """
     Build a prompt asking DeepSeek to generate:
-    1. A follow-up recommendation for this customer
-    2. A WhatsApp opening message
+    1. A follow-up recommendation for this customer (繁體中文)
+    2. A WhatsApp opening message (繁體中文)
 
     NOTE: Hidden Score is never included in this prompt.
     """
     stage = getattr(customer, "stage", None)
     stage_value = stage.value if hasattr(stage, "value") else str(stage)
+    # Map stage to Chinese for clarity
+    stage_zh = {
+        "Cold": "冷（新名單）",
+        "Warm": "暖（有興趣）",
+        "Hot": "熱（高意向）",
+        "Proposal": "方案（準備簽單）",
+        "Closed": "已成交",
+        "Lost": "已流失",
+    }.get(stage_value, stage_value)
+
     notes = getattr(customer, "notes", "") or ""
     opp_score = getattr(opportunity_analysis, "opportunity_score", "N/A") if opportunity_analysis else "N/A"
-    priority = getattr(opportunity_analysis, "priority", "Medium") if opportunity_analysis else "Medium"
+    priority_raw = getattr(opportunity_analysis, "priority", "Medium") if opportunity_analysis else "Medium"
+    priority_zh = {"High": "高", "Medium": "中", "Low": "低"}.get(str(priority_raw), str(priority_raw))
 
     return (
-        f"You are an insurance sales coach. A customer named {getattr(customer, 'name', 'Unknown')} "
-        f"is currently at the '{stage_value}' stage with an AI opportunity score of {opp_score} "
-        f"(priority: {priority}). Notes: {notes[:200] if notes else 'None'}.\n\n"
-        "Please provide:\n"
-        "1. A brief follow-up recommendation (2-3 sentences) for the agent.\n"
-        "2. A WhatsApp opening message the agent can send directly to this customer (1-2 sentences, friendly and professional).\n\n"
-        "Format your response as:\n"
-        "Follow-up Recommendation: [your recommendation]\n"
-        "WhatsApp Opening: [your message]"
+        f"客戶姓名：{getattr(customer, 'name', '未知')}\n"
+        f"客戶階段：{stage_zh}\n"
+        f"AI 機會分：{opp_score}（優先級：{priority_zh}）\n"
+        f"備註：{notes[:200] if notes else '無'}\n\n"
+        "請提供：\n"
+        "1. 跟進建議：針對此客戶，給代理人 2-3 句具體的跟進方向。\n"
+        "2. WhatsApp 開場句：代理人可以直接發送給客戶的 1-2 句親切專業開場白。\n\n"
+        "請以以下格式輸出：\n"
+        "跟進建議: [你的建議]\n"
+        "WhatsApp 開場句: [你的開場白]"
     )
 
 
 def build_agent_coaching_prompt(agent: Any, performance_analysis: Any, coaching_plan: Any) -> str:
     """
-    Build a prompt for DeepSeek agent coaching advice.
+    Build a prompt for DeepSeek agent coaching advice in Traditional Chinese.
 
     NOTE: Hidden Score is deliberately excluded from this prompt (agent role restriction).
     """
-    agent_name = getattr(agent, "name", None) or getattr(agent, "id", "Agent")
+    agent_name = getattr(agent, "name", None) or getattr(agent, "id", "代理")
     problem_stage = getattr(performance_analysis, "conversion_problem_stage", "activity_gap") if performance_analysis else "activity_gap"
     perf_score = getattr(performance_analysis, "performance_score", 0) if performance_analysis else 0
     metrics = getattr(performance_analysis, "metrics", {}) if performance_analysis else {}
     appt_rate = metrics.get("appointment_rate", 0)
     meeting_rate = metrics.get("meeting_rate", 0)
     closing_rate = metrics.get("closing_rate", 0)
-    topic_key = getattr(coaching_plan, "coaching_topic_key", "") if coaching_plan else ""
-    topic = topic_key.split(".")[-1].replace("_", " ") if topic_key else problem_stage.replace("_", " ")
+
+    problem_zh = {
+        "activity_gap": "活動量不足",
+        "appointment_conversion": "預約轉化偏低",
+        "meeting_conversion": "見客轉化偏低",
+        "closing_conversion": "成交轉化偏低",
+        "balanced_pipeline": "Pipeline 平衡",
+    }.get(problem_stage, problem_stage)
 
     return (
-        f"You are an expert insurance sales manager providing coaching advice.\n"
-        f"Agent: {agent_name}\n"
-        f"Performance score: {perf_score}/100\n"
-        f"Current bottleneck: {problem_stage.replace('_', ' ')}\n"
-        f"Key metrics — Appointment rate: {appt_rate:.1f}%, Meeting rate: {meeting_rate:.1f}%, Closing rate: {closing_rate:.1f}%\n"
-        f"Coaching focus: {topic}\n\n"
-        "Please provide:\n"
-        "1. A concise coaching insight (2-3 sentences) explaining why this agent is struggling.\n"
-        "2. Two specific action steps the agent should take this week.\n\n"
-        "Format your response as:\n"
-        "Coaching Insight: [your insight]\n"
-        "Action Steps:\n"
-        "- [step 1]\n"
-        "- [step 2]"
+        f"代理人：{agent_name}\n"
+        f"表現分：{perf_score}/100\n"
+        f"目前主要瓶頸：{problem_zh}\n"
+        f"關鍵數據 — 預約率：{appt_rate:.1f}%、見客率：{meeting_rate:.1f}%、成交率：{closing_rate:.1f}%\n\n"
+        "請提供：\n"
+        "1. 輔導洞察：用 2-3 句說明為何此代理人在這個階段遇到困難。\n"
+        "2. 本週行動建議：列出 2 個具體、可執行的改善步驟。\n\n"
+        "請以以下格式輸出：\n"
+        "輔導洞察: [你的分析]\n"
+        "行動建議:\n"
+        "- [步驟一]\n"
+        "- [步驟二]"
     )
 
 
@@ -170,7 +204,7 @@ def build_manager_briefing_prompt(
     opportunity_customers: list,
 ) -> str:
     """
-    Build a prompt for a manager's daily team briefing.
+    Build a prompt for a manager's daily team briefing in Traditional Chinese.
 
     NOTE: Hidden Score raw values are not included — only risk counts are used.
     """
@@ -178,29 +212,52 @@ def build_manager_briefing_prompt(
     affected_agents = team_metrics.get("affected_agent_count", 0)
     high_risk_count = team_metrics.get("high_risk_agent_count", 0)
     top_customer_count = team_metrics.get("top_customer_count", 0)
-    main_problem = team_metrics.get("main_problem", "activity_gap").replace("_", " ")
-    risk_names = [str(a) for a in (risk_agents or [])[:5]]
-    top_customer_names = [str(c) for c in (opportunity_customers or [])[:5]]
+    warm_count = team_metrics.get("warm_customer_count", 0)
+    overdue_count = team_metrics.get("overdue_followup_count", 0)
+    main_problem = team_metrics.get("main_problem", "activity_gap")
+    problem_zh = {
+        "activity_gap": "Pipeline 活動量不足",
+        "appointment_conversion": "預約轉化偏低",
+        "meeting_conversion": "見客確認不足",
+        "closing_conversion": "成交轉化偏低",
+        "balanced_pipeline": "Pipeline 穩定",
+    }.get(main_problem, main_problem)
+
+    risk_names = []
+    for a in (risk_agents or [])[:5]:
+        if isinstance(a, dict):
+            risk_names.append(a.get("name") or a.get("id", ""))
+        else:
+            risk_names.append(str(a))
+
+    top_customer_names = []
+    for c in (opportunity_customers or [])[:5]:
+        if isinstance(c, dict):
+            top_customer_names.append(c.get("customer", str(c)))
+        else:
+            top_customer_names.append(str(c))
 
     return (
-        f"You are an AI assistant for an insurance team manager. Here is today's team snapshot:\n"
-        f"- Total agents: {total_agents}\n"
-        f"- Agents affected by main bottleneck ({main_problem}): {affected_agents}\n"
-        f"- High-risk agents: {high_risk_count}\n"
-        f"- Top customer opportunities today: {top_customer_count}\n"
-        f"- Risk agents: {', '.join(risk_names) if risk_names else 'None'}\n"
-        f"- Top customers to follow up: {', '.join(top_customer_names) if top_customer_names else 'None'}\n\n"
-        "Please provide a manager's daily briefing in 3 sections:\n"
-        "1. Today's Briefing (2-3 sentences summarising the team situation)\n"
-        "2. Main Team Bottleneck (1-2 sentences identifying the core issue)\n"
-        "3. Today's Priority Actions (2-3 bullet points the manager should take today)\n\n"
-        "Format your response as:\n"
-        "Today's Briefing: [briefing]\n"
-        "Main Bottleneck: [bottleneck]\n"
-        "Priority Actions:\n"
-        "- [action 1]\n"
-        "- [action 2]\n"
-        "- [action 3]"
+        f"今日團隊數據摘要：\n"
+        f"- 代理總數：{total_agents} 人\n"
+        f"- 主要瓶頸（{problem_zh}）影響代理數：{affected_agents} 人\n"
+        f"- 高風險代理數：{high_risk_count} 人\n"
+        f"- 今日高潛力客戶機會：{top_customer_count} 個\n"
+        f"- Warm 客戶總數：{warm_count} 個\n"
+        f"- 逾期跟進數：{overdue_count} 個\n"
+        f"- 高風險代理：{('、'.join(risk_names)) if risk_names else '無'}\n"
+        f"- 今日優先跟進客戶：{('、'.join(top_customer_names)) if top_customer_names else '無'}\n\n"
+        "請以主管角度，提供今日團隊簡報，分三個部分：\n"
+        "1. 今日重點：2-3 句總結今日團隊狀況，需包含具體數字。\n"
+        "2. 主要瓶頸：1-2 句點出核心問題，如有高風險代理請點名。\n"
+        "3. 優先行動：列出 3 個今日主管應執行的具體行動。\n\n"
+        "請以以下格式輸出：\n"
+        "今日重點: [簡報內容]\n"
+        "主要瓶頸: [瓶頸說明]\n"
+        "優先行動:\n"
+        "- [行動一]\n"
+        "- [行動二]\n"
+        "- [行動三]"
     )
 
 

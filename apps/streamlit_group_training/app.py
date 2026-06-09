@@ -577,6 +577,7 @@ def hidden_score_summary(scores_df: pd.DataFrame, locale: str) -> pd.DataFrame:
 
 
 def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart:
+    """Horizontal bar chart (legacy — kept for breakdown expander)."""
     return (
         alt.Chart(score_summary_df)
         .mark_bar(cornerRadiusEnd=4, height=18)
@@ -609,6 +610,107 @@ def hidden_score_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart
             ],
         )
         .properties(height=240)
+    )
+
+
+def hidden_score_bar_chart(score_summary_df: pd.DataFrame, locale: str) -> alt.Chart:
+    """Vertical bar chart sorted high-to-low (P2 requirement)."""
+    if score_summary_df.empty:
+        return alt.Chart(pd.DataFrame({"agent_id": [], "average_hidden_score": []})).mark_bar()
+    sorted_df = score_summary_df.sort_values("average_hidden_score", ascending=False).reset_index(drop=True)
+    agent_order = sorted_df["agent_id"].tolist()
+    return (
+        alt.Chart(sorted_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=alt.X("agent_id:N", title=None, sort=agent_order, axis=alt.Axis(labelAngle=-30, labelLimit=120)),
+            y=alt.Y(
+                "average_hidden_score:Q",
+                title=None,
+                scale=alt.Scale(domain=[0, 100]),
+                axis=alt.Axis(values=[0, 25, 50, 75, 100], grid=True),
+            ),
+            color=alt.Color(
+                "risk_hint:N",
+                title=None,
+                scale=alt.Scale(
+                    domain=[
+                        t(locale, "hidden_score.risk_low"),
+                        t(locale, "hidden_score.risk_medium"),
+                        t(locale, "hidden_score.risk_high"),
+                        t(locale, "hidden_score.risk_critical"),
+                    ],
+                    range=["#16a34a", "#f59e0b", "#dc2626", "#7f1d1d"],
+                ),
+                legend=alt.Legend(orient="bottom"),
+            ),
+            tooltip=[
+                alt.Tooltip("agent_id:N", title=t(locale, "column.agent_id")),
+                alt.Tooltip("average_hidden_score:Q", title=t(locale, "column.average_hidden_score"), format=".1f"),
+                alt.Tooltip("risk_hint:N", title=t(locale, "column.risk_hint")),
+            ],
+        )
+        .properties(height=300)
+    )
+
+
+def funnel_chart(logs, locale: str) -> alt.Chart:
+    """Sales funnel chart showing outreach→appointment→meeting→closing with conversion rates."""
+    if not logs:
+        total_outreach = total_appts = total_meetings = total_closings = 0
+    else:
+        total_outreach = sum(getattr(l, "call_count", 0) + getattr(l, "whatsapp_count", 0) for l in logs)
+        total_appts = sum(getattr(l, "appointment_count", 0) for l in logs)
+        total_meetings = sum(getattr(l, "meeting_count", 0) for l in logs)
+        total_closings = sum(getattr(l, "closing_count", 0) for l in logs)
+
+    stage_labels = [
+        t(locale, "stage.Cold"),      # 接觸
+        t(locale, "daily.appointment_count").replace("數", "").strip() or "預約",
+        t(locale, "daily.meeting_count").replace("數", "").strip() or "見客",
+        t(locale, "daily.closing_count").replace("數", "").strip() or "成交",
+    ]
+    counts = [total_outreach, total_appts, total_meetings, total_closings]
+    # Use cleaner labels
+    stage_display = ["接觸", "預約", "見客", "成交"] if locale == "zh_HK" else ["Outreach", "Appt", "Meeting", "Closing"]
+
+    def conv_rate(numer, denom):
+        if denom == 0:
+            return "—"
+        return f"{numer / denom * 100:.0f}%"
+
+    rates = [
+        "100%",
+        conv_rate(total_appts, total_outreach),
+        conv_rate(total_meetings, total_appts),
+        conv_rate(total_closings, total_meetings),
+    ]
+    funnel_df = pd.DataFrame({
+        "stage": stage_display,
+        "count": counts,
+        "rate": rates,
+        "order": list(range(4)),
+    })
+    return (
+        alt.Chart(funnel_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=alt.X("stage:N", title=None, sort=stage_display, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("count:Q", title=None, axis=alt.Axis(tickMinStep=1, grid=True)),
+            color=alt.Color(
+                "stage:N",
+                title=None,
+                sort=stage_display,
+                scale=alt.Scale(range=["#2563eb", "#16a34a", "#f59e0b", "#dc2626"]),
+                legend=None,
+            ),
+            tooltip=[
+                alt.Tooltip("stage:N", title=t(locale, "dashboard.funnel_stage")),
+                alt.Tooltip("count:Q", title=t(locale, "dashboard.funnel_count")),
+                alt.Tooltip("rate:N", title=t(locale, "dashboard.funnel_rate")),
+            ],
+        )
+        .properties(height=260)
     )
 
 
@@ -2305,19 +2407,37 @@ def manager_dashboard_page(user, locale: str) -> None:
         text, used_llm = st.session_state[cache_key]
         if text:
             lines = [l.strip() for l in text.split("\n") if l.strip()]
-            briefing_lines = [l for l in lines if l.startswith("Briefing:") or l.startswith("簡報:")]
-            bottleneck_lines = [l for l in lines if l.startswith("Bottleneck:") or l.startswith("瓶頸:")]
-            priority_lines = [l for l in lines if l.startswith("Priority:") or l.startswith("優先行動:")]
+            # Support both Traditional Chinese and English section headers
+            briefing_lines = [l for l in lines if l.startswith("今日重點:") or l.startswith("Today's Briefing:")]
+            bottleneck_lines = [l for l in lines if l.startswith("主要瓶頸:") or l.startswith("Main Bottleneck:")]
+            # Collect bullet points for priority actions
+            in_priority = False
+            priority_bullets = []
+            for l in lines:
+                if l.startswith("優先行動:") or l.startswith("Priority Actions:"):
+                    in_priority = True
+                    continue
+                if in_priority and l.startswith("-"):
+                    priority_bullets.append(l.lstrip("- ").strip())
+                elif in_priority and not l.startswith("-") and l:
+                    in_priority = False
+
             b_col1, b_col2, b_col3 = st.columns(3)
             with b_col1:
                 st.markdown(f"**{t(locale, 'llm.manager_briefing_title')}**")
-                st.info((briefing_lines[0].split(":", 1)[-1].strip() if briefing_lines else lines[0]) if lines else "—")
+                briefing_text = briefing_lines[0].split(":", 1)[-1].strip() if briefing_lines else (lines[0] if lines else "—")
+                st.info(briefing_text)
             with b_col2:
                 st.markdown(f"**{t(locale, 'llm.manager_bottleneck_title')}**")
-                st.warning((bottleneck_lines[0].split(":", 1)[-1].strip() if bottleneck_lines else (lines[1] if len(lines) > 1 else "—")))
+                bottleneck_text = bottleneck_lines[0].split(":", 1)[-1].strip() if bottleneck_lines else (lines[1] if len(lines) > 1 else "—")
+                st.warning(bottleneck_text)
             with b_col3:
                 st.markdown(f"**{t(locale, 'llm.manager_priority_title')}**")
-                st.success((priority_lines[0].split(":", 1)[-1].strip() if priority_lines else (lines[2] if len(lines) > 2 else "—")))
+                if priority_bullets:
+                    for bullet in priority_bullets[:3]:
+                        st.success(f"• {bullet}")
+                else:
+                    st.success(lines[2] if len(lines) > 2 else "—")
         if not used_llm:
             st.caption(t(locale, "llm.fallback_notice"))
 
@@ -2335,34 +2455,11 @@ def manager_dashboard_page(user, locale: str) -> None:
     else:
         chart_col_2.info(t(locale, "dashboard.no_customer_data"))
 
-    team_col, score_col = st.columns(2)
-    team_col.markdown(t(locale, "dashboard.team_downline"))
-    render_simple_table(
-        pd.DataFrame(
-            [{"agent_id": agent_display_name(repo, a.id), "name": a.name, "email": a.email, "team_id": a.team_id} for a in dashboard["agents"]],
-            columns=["agent_id", "name", "email", "team_id"],
-        ),
-        locale,
-        team_col,
-    )
-    team_col.markdown(t(locale, "dashboard.top_agents"))
-    render_simple_table(top_agents_to_dataframe(repo, metrics["top_agents"]), locale, team_col)
-    team_col.markdown(t(locale, "dashboard.risk_agents"))
-    render_simple_table(risk_agents_to_dataframe(repo, metrics["risk_agent_ids"], locale), locale, team_col)
-    team_col.markdown(t(locale, "coaching.title"))
-    # --- Dashboard Coaching Summary: 4 core columns ---
-    dash_coaching_df = coaching_plan_to_dataframe(coaching_plans, locale)
-    dash_core_cols = ["agent_id", "hidden_score", "risk", "performance_score"]
-    dash_available_core = [c for c in dash_core_cols if c in dash_coaching_df.columns]
-    render_simple_table(dash_coaching_df[dash_available_core], locale, team_col)
-    # --- Expander: full coaching plan ---
-    dash_expander_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "manager_note", "target_metric", "target_date", "expected_improvement"]
-    dash_available_expander = [c for c in dash_expander_cols if c in dash_coaching_df.columns]
-    if not dash_coaching_df.empty and dash_available_expander:
-        with team_col.expander(t(locale, "coaching.expander_plan_details")):
-            render_simple_table(dash_coaching_df[dash_available_expander], locale)
+    # --- Funnel Chart + Hidden Score Bar Chart ---
+    funnel_col, hbar_col = st.columns(2)
+    funnel_col.markdown(f"**{t(locale, 'dashboard.funnel_title')}**")
+    funnel_col.altair_chart(funnel_chart(dashboard["daily_logs"], locale), use_container_width=True)
 
-    score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
     scores_df = pd.DataFrame(
         [
             {
@@ -2376,14 +2473,60 @@ def manager_dashboard_page(user, locale: str) -> None:
         columns=["date", "agent_id", "hidden_score", "rationale"],
     )
     score_summary_df = hidden_score_summary(scores_df, locale)
-    if not scores_df.empty:
+    hbar_col.markdown(f"**{t(locale, 'dashboard.hidden_score_bar_title')}**")
+    if not score_summary_df.empty:
         average_score = score_summary_df["average_hidden_score"].mean()
-        score_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
-        score_col.altair_chart(hidden_score_chart(score_summary_df, locale), use_container_width=True)
+        hbar_col.metric(t(locale, "hidden_score.average_by_agent"), f"{average_score:.1f}")
+        hbar_col.altair_chart(hidden_score_bar_chart(score_summary_df, locale), use_container_width=True)
+    else:
+        hbar_col.info(t(locale, "dashboard.no_score_data"))
+
+    # --- Top Performer + Risk Ranking ---
+    top_col, risk_col = st.columns(2)
+    top_col.markdown(f"**{t(locale, 'dashboard.top_performer_title')}**")
+    if metrics.get("top_agents"):
+        top_df = top_agents_to_dataframe(repo, metrics["top_agents"][:5])
+        top_df.insert(0, "rank", list(range(1, len(top_df) + 1)))
+        render_simple_table(top_df, locale, top_col)
+    else:
+        top_col.info(t(locale, "dashboard.no_score_data"))
+
+    risk_col.markdown(f"**{t(locale, 'dashboard.risk_ranking_title')}**")
+    if metrics.get("risk_agent_ids"):
+        risk_df = risk_agents_to_dataframe(repo, metrics["risk_agent_ids"][:5], locale)
+        risk_df.insert(0, "rank", list(range(1, len(risk_df) + 1)))
+        render_simple_table(risk_df, locale, risk_col)
+    else:
+        risk_col.info(t(locale, "dashboard.no_score_data"))
+
+    # --- Team Downline (simplified) + Coaching ---
+    team_col, score_col = st.columns(2)
+    team_col.markdown(t(locale, "dashboard.team_downline"))
+    render_simple_table(
+        pd.DataFrame(
+            [{"agent_id": agent_display_name(repo, a.id), "name": a.name} for a in dashboard["agents"]],
+            columns=["agent_id", "name"],
+        ),
+        locale,
+        team_col,
+    )
+    team_col.markdown(t(locale, "coaching.title"))
+    dash_coaching_df = coaching_plan_to_dataframe(coaching_plans, locale)
+    dash_core_cols = ["agent_id", "hidden_score", "risk", "performance_score"]
+    dash_available_core = [c for c in dash_core_cols if c in dash_coaching_df.columns]
+    render_simple_table(dash_coaching_df[dash_available_core], locale, team_col)
+    dash_expander_cols = ["agent_id", "coaching_issue", "root_cause", "training_focus", "next_action", "manager_note", "target_metric", "target_date", "expected_improvement"]
+    dash_available_expander = [c for c in dash_expander_cols if c in dash_coaching_df.columns]
+    if not dash_coaching_df.empty and dash_available_expander:
+        with team_col.expander(t(locale, "coaching.expander_plan_details")):
+            render_simple_table(dash_coaching_df[dash_available_expander], locale)
+
+    score_col.markdown(t(locale, "dashboard.hidden_closing_score"))
+    if not scores_df.empty:
         render_simple_table(score_summary_df, locale, score_col)
-        with score_col.expander(t(locale, "hidden_score.breakdown_title")) as breakdown_container:
-            render_simple_table(hidden_score_breakdown_dataframe(dashboard["closing_scores"], dashboard["daily_logs"], locale), locale, breakdown_container)
-    render_simple_table(scores_df, locale, score_col)
+        with score_col.expander(t(locale, "hidden_score.breakdown_title")):
+            render_simple_table(hidden_score_breakdown_dataframe(dashboard["closing_scores"], dashboard["daily_logs"], locale), locale)
+    render_simple_table(scores_df.drop(columns=["rationale"], errors="ignore"), locale, score_col)
 
 
 def main() -> None:
