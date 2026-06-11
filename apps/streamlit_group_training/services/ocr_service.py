@@ -10,8 +10,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from core.ocr.ocr_engine import extract_text_with_ocr
-
 
 SUPPORTED_OCR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"}
 UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
@@ -148,6 +146,26 @@ def extract_text_from_image(image_bytes: bytes) -> dict[str, Any]:
     }
 
 
+def parse_customer_from_ocr_text(text: str) -> dict[str, Any]:
+    """Parse customer fields from OCR text."""
+    return convert_ocr_text_to_structured_data(text, "customer")
+
+
+def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
+    """Return a stable display label for OCR provider/status."""
+    normalized_provider = (provider or "unavailable").strip().lower()
+    normalized_status = (status or "").strip().lower()
+    if normalized_provider == "mock":
+        return "mock"
+    if normalized_provider == "tesseract":
+        return "tesseract"
+    if normalized_provider == "unsupported" or normalized_status == "unsupported":
+        return "unsupported"
+    if normalized_provider == "unavailable" or normalized_status == "unavailable":
+        return "unavailable"
+    return normalized_provider or "unavailable"
+
+
 def _extract_with_tesseract(file_bytes: bytes, suffix: str) -> OCRUploadResult:
     temp_path: Path | None = None
     try:
@@ -155,7 +173,7 @@ def _extract_with_tesseract(file_bytes: bytes, suffix: str) -> OCRUploadResult:
             temp_file.write(file_bytes)
             temp_path = Path(temp_file.name)
 
-        extraction = extract_text_with_ocr(temp_path)
+        extraction = _extract_text_with_core_ocr(temp_path)
         status = str(extraction.get("ocr_status") or "failed").lower()
         text = str(extraction.get("extracted_text") or "")
         warning = str(extraction.get("warning") or "")
@@ -176,6 +194,28 @@ def _extract_with_tesseract(file_bytes: bytes, suffix: str) -> OCRUploadResult:
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+def _extract_text_with_core_ocr(file_path: Path) -> dict[str, Any]:
+    """Lazy-load the core OCR engine so missing OCR deps cannot crash app startup."""
+    try:
+        from core.ocr.ocr_engine import extract_text_with_ocr
+    except Exception as exc:
+        return {
+            "ocr_status": "UNAVAILABLE",
+            "extracted_text": "",
+            "warning": str(exc),
+            "ocr_message": OCR_UNAVAILABLE_ERROR,
+        }
+    try:
+        return extract_text_with_ocr(file_path)
+    except Exception as exc:
+        return {
+            "ocr_status": "FAILED",
+            "extracted_text": "",
+            "warning": str(exc),
+            "ocr_message": "OCR extraction failed.",
+        }
 
 
 def _mock_ocr_result() -> OCRUploadResult:
@@ -203,7 +243,7 @@ def _mock_ocr_result() -> OCRUploadResult:
     )
 
 
-def convert_ocr_text_to_structured_data(raw_text: str, data_type: str) -> dict[str, Any]:
+def convert_ocr_text_to_structured_data(raw_text: str, data_type: str = "customer") -> dict[str, Any]:
     """Convert raw OCR text into structured CRM, activity, or follow-up fields."""
     normalized_type = data_type.strip().lower()
     parsed = _parse_key_values(raw_text)

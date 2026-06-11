@@ -5,8 +5,11 @@ import pytest
 
 from apps.streamlit_group_training.services import ocr_service
 from apps.streamlit_group_training.services.ocr_service import (
+    OCRUploadResult,
     convert_ocr_text_to_structured_data,
     extract_text_from_upload,
+    get_ocr_provider_label,
+    parse_customer_from_ocr_text,
 )
 from verticals.group_training.models import Customer, CustomerStage, Team, User, UserRole
 from verticals.group_training.services.customer_service import CustomerService
@@ -14,6 +17,14 @@ from verticals.group_training.services.repository import GroupTrainingRepository
 
 
 I18N_DIR = Path(__file__).resolve().parents[1] / "apps" / "streamlit_group_training" / "i18n"
+
+
+def test_ocr_service_exports_import_compatibility_names():
+    assert OCRUploadResult
+    assert callable(extract_text_from_upload)
+    assert callable(parse_customer_from_ocr_text)
+    assert callable(get_ocr_provider_label)
+    assert callable(convert_ocr_text_to_structured_data)
 
 
 def test_mock_provider_explicitly_returns_mock_result():
@@ -36,7 +47,7 @@ def test_auto_provider_does_not_return_mock_by_default(monkeypatch):
             "ocr_message": "OCR extraction successful",
         }
 
-    monkeypatch.setattr(ocr_service, "extract_text_with_ocr", fake_extract_text_with_ocr)
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
 
     result = extract_text_from_upload(b"fake-image", "upload.png", provider="auto")
 
@@ -119,7 +130,7 @@ def test_tesseract_adapter_can_be_mocked_without_real_tesseract(monkeypatch):
             "ocr_message": "OCR extraction successful",
         }
 
-    monkeypatch.setattr(ocr_service, "extract_text_with_ocr", fake_extract_text_with_ocr)
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
 
     result = extract_text_from_upload(b"fake-image", "receipt.png", provider="tesseract")
 
@@ -140,7 +151,7 @@ def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypat
             "ocr_message": "OCR extraction successful",
         }
 
-    monkeypatch.setattr(ocr_service, "extract_text_with_ocr", fake_extract_text_with_ocr)
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
 
     result = extract_text_from_upload(b"fake-image", "upload.png", provider="auto")
 
