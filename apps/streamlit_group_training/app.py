@@ -22,7 +22,7 @@ import altair as alt
 from apps.streamlit_group_training.i18n.loader import DEFAULT_LOCALE, SUPPORTED_LOCALES, translate
 from apps.streamlit_group_training.services.ocr_service import (
     convert_ocr_text_to_structured_data,
-    extract_text_from_image,
+    extract_text_from_upload,
 )
 from apps.streamlit_group_training.services.demo_dataset_service import (
     demo_dataset_allowed,
@@ -1949,7 +1949,6 @@ def ocr_capture_page(user, locale: str) -> None:
     file_bytes = b""
     if uploaded_file:
         file_bytes = uploaded_file.getvalue()
-        st.info(t(locale, "data.demo_mode"))
         file_info_df = pd.DataFrame(
             [
                 {
@@ -1968,17 +1967,18 @@ def ocr_capture_page(user, locale: str) -> None:
             st.info(t(locale, "ocr.non_image_received"))
 
     if st.button(t(locale, "ocr.start_extract"), disabled=not bool(file_bytes), key=f"ocr_start_extract_{user.id}"):
-        extraction = extract_text_from_image(file_bytes)
-        if not os.environ.get("GEMINI_API_KEY"):
-            st.info(t(locale, "ocr.no_api_key"))
-        if not extraction["ok"]:
-            st.error(t(locale, "ocr.extract_failed", error=extraction.get("error") or ""))
-            return
-        structured = convert_ocr_text_to_structured_data(extraction["raw_text"], selected_data_type)
+        extraction = extract_text_from_upload(file_bytes, uploaded_file.name, provider="auto")
+        if extraction.status in {"failed", "unavailable"}:
+            st.error(t(locale, "ocr.extract_failed", error=extraction.error or ""))
+        elif extraction.status == "unsupported":
+            st.warning(t(locale, "ocr.extract_failed", error=extraction.error or ""))
+        structured = convert_ocr_text_to_structured_data(extraction.text, selected_data_type)
         st.session_state["ocr_result"] = {
             "data_type": selected_data_type,
-            "raw_text": extraction["raw_text"],
-            "provider": extraction["provider"],
+            "raw_text": extraction.text,
+            "provider": extraction.provider,
+            "status": extraction.status,
+            "error": extraction.error,
             "structured": structured,
         }
 
@@ -1986,6 +1986,7 @@ def ocr_capture_page(user, locale: str) -> None:
     if not result:
         return
     st.caption(t(locale, "ocr.provider", provider=result["provider"]))
+    st.caption(t(locale, "ocr.status", status=result.get("status", "")))
     st.markdown(t(locale, "ocr.raw_text"))
     st.text_area(t(locale, "ocr.raw_text"), value=result["raw_text"], height=160, disabled=True, label_visibility="collapsed")
     st.markdown(t(locale, "ocr.structured_result"))

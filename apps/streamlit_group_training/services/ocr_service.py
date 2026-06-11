@@ -1,11 +1,30 @@
-"""OCR extraction and rule-based parsing for the Streamlit group training MVP."""
+"""OCR extraction and rule-based parsing for the Streamlit group training app."""
 
 from __future__ import annotations
 
 import os
 import re
+import tempfile
+from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
+
+from core.ocr.ocr_engine import extract_text_with_ocr
+
+
+SUPPORTED_OCR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"}
+UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
+
+
+@dataclass
+class OCRUploadResult:
+    provider: str
+    status: str
+    text: str
+    error: str | None = None
+    is_mock: bool = False
 
 
 CUSTOMER_FIELDS = {
@@ -40,52 +59,130 @@ FOLLOW_UP_FIELDS = {
 
 
 FIELD_ALIASES = {
-    "name": {"name", "customer", "customer name", "客戶", "客戶姓名", "姓名"},
-    "phone": {"phone", "tel", "mobile", "電話", "手機"},
-    "email": {"email", "e-mail", "電郵", "郵箱"},
-    "stage": {"stage", "客戶階段", "階段"},
+    "name": {"name", "customer", "customer name", "姓名", "客戶", "客戶姓名", "名稱"},
+    "phone": {"phone", "tel", "telephone", "mobile", "電話", "手機", "聯絡電話"},
+    "email": {"email", "e-mail", "電郵", "電子郵件", "郵箱"},
+    "stage": {"stage", "status", "customer status", "客戶狀態", "階段", "狀態"},
     "source": {"source", "來源"},
-    "notes": {"notes", "note", "remarks", "備註", "跟進備註"},
-    "next_action": {"next action", "action", "下一步", "後續行動"},
-    "next_follow_up_date": {"next follow up", "follow up date", "next follow-up date", "下次跟進", "跟進日期"},
-    "customer_name": {"customer", "customer name", "客戶", "客戶姓名"},
+    "notes": {"notes", "note", "remarks", "備註", "筆記"},
+    "next_action": {"next action", "action", "下一步", "下步行動", "跟進行動"},
+    "next_follow_up_date": {
+        "next follow up",
+        "next follow-up",
+        "next follow up date",
+        "next follow-up date",
+        "follow up date",
+        "date",
+        "下次跟進",
+        "下次跟進日期",
+        "跟進日期",
+        "日期",
+    },
+    "customer_name": {"customer", "customer name", "name", "客戶", "客戶姓名", "姓名", "名稱"},
     "activity_type": {"activity", "activity type", "工作類型", "活動類型"},
-    "activity_date": {"date", "activity date", "日期", "工作日期"},
+    "activity_date": {"date", "activity date", "日期", "工作日期", "活動日期"},
 }
 
 STAGE_ALIASES = {
     "cold": "Cold",
     "冷": "Cold",
+    "冷淡": "Cold",
     "warm": "Warm",
     "暖": "Warm",
+    "溫": "Warm",
     "hot": "Hot",
     "熱": "Hot",
+    "熱門": "Hot",
     "proposal": "Proposal",
-    "方案": "Proposal",
     "closing": "Proposal",
+    "建議書": "Proposal",
+    "方案": "Proposal",
     "closed": "Closed",
-    "已成交": "Closed",
     "成交": "Closed",
+    "已成交": "Closed",
     "lost": "Lost",
-    "已流失": "Lost",
     "流失": "Lost",
+    "失去": "Lost",
 }
 
 
+def extract_text_from_upload(file_bytes: bytes, filename: str, provider: str = "auto") -> OCRUploadResult:
+    """Extract OCR text from uploaded bytes using an explicit or configured provider."""
+    requested_provider = (provider or os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
+    if requested_provider == "auto":
+        requested_provider = (os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
+
+    if requested_provider == "mock":
+        return _mock_ocr_result()
+
+    suffix = Path(filename or "").suffix.lower()
+    if not file_bytes:
+        return OCRUploadResult(provider="unavailable", status="empty", text="", error="empty_upload")
+    if suffix in UNSUPPORTED_UPLOAD_EXTENSIONS or suffix not in SUPPORTED_OCR_EXTENSIONS:
+        return OCRUploadResult(
+            provider="unsupported",
+            status="unsupported",
+            text="",
+            error=f"Unsupported file type: {suffix or 'unknown'}",
+        )
+    if requested_provider not in {"auto", "tesseract"}:
+        return OCRUploadResult(
+            provider="unsupported",
+            status="unsupported",
+            text="",
+            error=f"Unsupported OCR provider: {requested_provider}",
+        )
+
+    return _extract_with_tesseract(file_bytes, suffix)
+
+
 def extract_text_from_image(image_bytes: bytes) -> dict[str, Any]:
-    """
-    Return OCR text using a safe MVP placeholder.
-
-    A future Gemini Vision adapter can branch on GEMINI_API_KEY here. The current
-    MVP never requires the key and never writes extracted data automatically.
-    """
-    if not image_bytes:
-        return {"ok": False, "raw_text": "", "error": "empty_image", "provider": "mock"}
-
-    provider = "gemini-placeholder" if os.environ.get("GEMINI_API_KEY") else "mock"
+    """Backward-compatible wrapper; real OCR is used unless OCR_PROVIDER=mock."""
+    result = extract_text_from_upload(image_bytes, "upload.png")
     return {
-        "ok": True,
-        "raw_text": (
+        "ok": result.status not in {"failed", "unavailable", "unsupported"},
+        "raw_text": result.text,
+        "error": result.error,
+        "provider": result.provider,
+        "status": result.status,
+    }
+
+
+def _extract_with_tesseract(file_bytes: bytes, suffix: str) -> OCRUploadResult:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(file_bytes)
+            temp_path = Path(temp_file.name)
+
+        extraction = extract_text_with_ocr(temp_path)
+        status = str(extraction.get("ocr_status") or "failed").lower()
+        text = str(extraction.get("extracted_text") or "")
+        warning = str(extraction.get("warning") or "")
+        message = str(extraction.get("ocr_message") or "")
+
+        if status in {"success", "skipped_selectable"}:
+            return OCRUploadResult(provider="tesseract", status="success", text=text, error=None)
+        if status == "empty":
+            return OCRUploadResult(provider="tesseract", status="empty", text="", error=message or None)
+        if status == "unavailable":
+            error = f"{OCR_UNAVAILABLE_ERROR} {warning}".strip() if warning else OCR_UNAVAILABLE_ERROR
+            return OCRUploadResult(provider="unavailable", status="unavailable", text=text, error=error)
+        if status == "unsupported":
+            return OCRUploadResult(provider="unsupported", status="unsupported", text=text, error=message or warning or None)
+        return OCRUploadResult(provider="tesseract", status="failed", text=text, error=warning or message or "OCR failed")
+    except Exception as exc:
+        return OCRUploadResult(provider="tesseract", status="failed", text="", error=str(exc))
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+
+def _mock_ocr_result() -> OCRUploadResult:
+    return OCRUploadResult(
+        provider="mock",
+        status="success",
+        text=(
             "Name: Demo Customer\n"
             "Phone: 91234567\n"
             "Email: demo.customer@example.com\n"
@@ -101,9 +198,9 @@ def extract_text_from_image(image_bytes: bytes) -> dict[str, Any]:
             "Next Action: Follow up by phone\n"
             "Next Follow Up: {today}"
         ).format(today=date.today().isoformat()),
-        "error": None,
-        "provider": provider,
-    }
+        error=None,
+        is_mock=True,
+    )
 
 
 def convert_ocr_text_to_structured_data(raw_text: str, data_type: str) -> dict[str, Any]:
@@ -135,7 +232,7 @@ def _parse_key_values(raw_text: str) -> dict[str, str]:
 def _canonical_field(label: str) -> str:
     normalized = label.strip().lower()
     for field, aliases in FIELD_ALIASES.items():
-        if normalized in aliases:
+        if normalized in {alias.lower() for alias in aliases}:
             return field
     return ""
 
@@ -147,7 +244,7 @@ def _convert_customer(raw_text: str, parsed: dict[str, str]) -> dict[str, Any]:
     result["email"] = result["email"] or _first_match(raw_text, r"[\w.\-+]+@[\w.\-]+\.\w+")
     result["stage"] = _normalize_stage(result["stage"]) or _stage_from_text(raw_text)
     result["next_follow_up_date"] = _normalize_date(result["next_follow_up_date"] or _date_from_text(raw_text))
-    if not result["name"]:
+    if not result["name"] and raw_text.strip():
         result["name"] = _first_non_empty_line(raw_text)
     return result
 
@@ -156,12 +253,12 @@ def _convert_daily_log(raw_text: str, parsed: dict[str, str]) -> dict[str, Any]:
     result = dict(DAILY_LOG_FIELDS)
     result.update({key: parsed.get(key, result[key]) for key in result})
     result["customer_name"] = result["customer_name"] or parsed.get("name", "")
-    result["activity_type"] = result["activity_type"] or "OCR"
-    result["activity_date"] = _normalize_date(result["activity_date"] or _date_from_text(raw_text)) or date.today().isoformat()
+    result["activity_type"] = result["activity_type"] or ("OCR" if raw_text.strip() else "")
+    result["activity_date"] = _normalize_date(result["activity_date"] or _date_from_text(raw_text))
     result["call_count"] = _count_from_text(raw_text, ["calls", "call", "電話", "通話"], result["call_count"])
     result["whatsapp_count"] = _count_from_text(raw_text, ["whatsapp", "whatsapps"], result["whatsapp_count"])
-    result["appointment_count"] = _count_from_text(raw_text, ["appointments", "appointment", "約見", "預約"], result["appointment_count"])
-    result["meeting_count"] = _count_from_text(raw_text, ["meetings", "meeting", "見客", "會議"], result["meeting_count"])
+    result["appointment_count"] = _count_from_text(raw_text, ["appointments", "appointment", "預約", "約見"], result["appointment_count"])
+    result["meeting_count"] = _count_from_text(raw_text, ["meetings", "meeting", "會議", "面談"], result["meeting_count"])
     result["closed_count"] = _count_from_text(raw_text, ["closed", "closings", "closing", "成交"], result["closed_count"])
     return result
 
@@ -171,7 +268,7 @@ def _convert_follow_up(raw_text: str, parsed: dict[str, str]) -> dict[str, Any]:
     result.update({key: parsed.get(key, result[key]) for key in result})
     result["customer_name"] = result["customer_name"] or parsed.get("name", "")
     result["next_follow_up_date"] = _normalize_date(result["next_follow_up_date"] or _date_from_text(raw_text))
-    if not result["notes"]:
+    if not result["notes"] and raw_text.strip():
         result["notes"] = parsed.get("source", "") or _first_non_empty_line(raw_text)
     return result
 
@@ -185,7 +282,7 @@ def _first_non_empty_line(text: str) -> str:
     for line in text.splitlines():
         cleaned = line.strip()
         if cleaned:
-            return cleaned.split(":", 1)[-1].strip()
+            return re.split(r"[:：]", cleaned, maxsplit=1)[-1].strip()
     return ""
 
 
