@@ -138,7 +138,7 @@
   "ocr.cost_mode.free": "Free",
   "ocr.cost_mode.paid": "Paid",
   "ocr.cost_mode.test": "Test",
-  "ocr.preprocessing_mode": "Tesseract image enhancement",
+  "ocr.preprocessing_mode": "Image enhancement",
   "ocr.preprocessing_result": "OCR preprocessing mode: {mode}",
   "ocr.preprocessing.original": "Original recognition",
   "ocr.preprocessing.enhanced": "Enhanced recognition",

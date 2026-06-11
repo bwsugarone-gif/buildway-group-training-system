@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import json
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
 OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
 OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
 GEMINI_OCR_UNAVAILABLE_ERROR = "Gemini OCR 未啟用，請確認 GEMINI_API_KEY 已設定。"
+PAID_OCR_DISABLED_ERROR = "Paid OCR is disabled. Set ENABLE_PAID_OCR=true to use Gemini OCR."
 
 
 @dataclass
@@ -112,13 +114,11 @@ STAGE_ALIASES = {
 def extract_text_from_upload(
     file_bytes: bytes,
     filename: str,
-    provider: str = "auto",
+    provider: str | None = None,
     preprocessing_mode: str = "original",
 ) -> OCRUploadResult:
-    """Extract OCR text from uploaded bytes using an explicit or configured provider."""
-    requested_provider = (provider or os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
-    if requested_provider == "auto":
-        requested_provider = (os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
+    """Extract OCR text from uploaded bytes using the configured provider."""
+    requested_provider = _resolve_ocr_provider(provider)
     normalized_preprocessing = _normalize_preprocessing_mode(preprocessing_mode)
 
     if requested_provider == "mock":
@@ -153,6 +153,15 @@ def extract_text_from_upload(
             cost_mode=_cost_mode_for_provider(requested_provider),
         )
     if requested_provider == "gemini":
+        if not _is_paid_ocr_enabled():
+            return OCRUploadResult(
+                provider="gemini",
+                status="unavailable",
+                text="",
+                error=PAID_OCR_DISABLED_ERROR,
+                preprocessing_mode="original",
+                cost_mode="paid",
+            )
         if suffix not in SUPPORTED_GEMINI_EXTENSIONS:
             return OCRUploadResult(
                 provider="gemini",
@@ -205,6 +214,25 @@ def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
 def _normalize_preprocessing_mode(mode: str) -> str:
     normalized = (mode or "original").strip().lower()
     return normalized if normalized in OCR_PREPROCESSING_MODES else "original"
+
+
+def _resolve_ocr_provider(provider: str | None = None) -> str:
+    configured = provider if provider not in {None, ""} else os.environ.get("OCR_PROVIDER")
+    normalized = (configured or "tesseract").strip().lower()
+    if normalized == "auto":
+        return "tesseract"
+    return normalized
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_paid_ocr_enabled() -> bool:
+    return _env_truthy("ENABLE_PAID_OCR", default=False)
 
 
 def _cost_mode_for_provider(provider: str) -> str:
@@ -415,10 +443,88 @@ def convert_ocr_text_to_structured_data(raw_text: str, data_type: str = "custome
     normalized_type = data_type.strip().lower()
     parsed = _parse_key_values(raw_text)
     if normalized_type == "daily_log":
-        return _convert_daily_log(raw_text, parsed)
+        rule_based = _convert_daily_log(raw_text, parsed)
+        return _merge_deepseek_structured(raw_text, normalized_type, rule_based)
     if normalized_type == "follow_up_note":
-        return _convert_follow_up(raw_text, parsed)
-    return _convert_customer(raw_text, parsed)
+        rule_based = _convert_follow_up(raw_text, parsed)
+        return _merge_deepseek_structured(raw_text, normalized_type, rule_based)
+    rule_based = _convert_customer(raw_text, parsed)
+    return _merge_deepseek_structured(raw_text, "customer", rule_based)
+
+
+def _merge_deepseek_structured(raw_text: str, data_type: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    if not raw_text.strip():
+        return fallback
+    deepseek_data = _extract_structured_data_with_deepseek(raw_text, data_type)
+    if not deepseek_data:
+        return fallback
+    merged = dict(fallback)
+    allowed_fields = set(merged)
+    for key, value in deepseek_data.items():
+        if key not in allowed_fields or value in {None, ""}:
+            continue
+        merged[key] = value
+    if "stage" in merged:
+        merged["stage"] = _normalize_stage(str(merged["stage"])) or str(merged["stage"] or "")
+    for date_field in ("next_follow_up_date", "activity_date"):
+        if date_field in merged:
+            merged[date_field] = _normalize_date(str(merged[date_field])) or str(merged[date_field] or "")
+    for count_field in ("call_count", "whatsapp_count", "appointment_count", "meeting_count", "closed_count"):
+        if count_field in merged:
+            try:
+                merged[count_field] = int(merged[count_field] or 0)
+            except (TypeError, ValueError):
+                merged[count_field] = fallback.get(count_field, 0)
+    return merged
+
+
+def _extract_structured_data_with_deepseek(raw_text: str, data_type: str) -> dict[str, Any]:
+    prompt = _build_deepseek_extraction_prompt(raw_text, data_type)
+    response = _call_deepseek_for_ocr(prompt)
+    if not response.strip():
+        return {}
+    return _parse_json_object(response)
+
+
+def _call_deepseek_for_ocr(prompt: str) -> str:
+    try:
+        from apps.streamlit_group_training.services.llm_service import call_deepseek
+    except Exception:
+        return ""
+    return call_deepseek(prompt, fallback="")
+
+
+def _build_deepseek_extraction_prompt(raw_text: str, data_type: str) -> str:
+    schema = {
+        "customer": CUSTOMER_FIELDS,
+        "daily_log": DAILY_LOG_FIELDS,
+        "follow_up_note": FOLLOW_UP_FIELDS,
+    }.get(data_type, CUSTOMER_FIELDS)
+    return (
+        "Extract structured data from the OCR text below for a Hong Kong insurance CRM.\n"
+        "Return JSON only. Do not include markdown. Do not invent missing data.\n"
+        f"Data type: {data_type}\n"
+        f"Allowed JSON keys and defaults: {json.dumps(schema, ensure_ascii=False)}\n"
+        "Dates must use YYYY-MM-DD when present. Counts must be integers.\n"
+        "OCR text:\n"
+        f"{raw_text[:6000]}"
+    )
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    try:
+        parsed = json.loads(cleaned[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_key_values(raw_text: str) -> dict[str, str]:

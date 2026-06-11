@@ -138,7 +138,7 @@
   "ocr.cost_mode.free": "免費",
   "ocr.cost_mode.paid": "付費",
   "ocr.cost_mode.test": "測試",
-  "ocr.preprocessing_mode": "Tesseract 圖像增強",
+  "ocr.preprocessing_mode": "圖片增強",
   "ocr.preprocessing_result": "OCR 預處理模式：{mode}",
   "ocr.preprocessing.original": "原圖識別",
   "ocr.preprocessing.enhanced": "增強識別",

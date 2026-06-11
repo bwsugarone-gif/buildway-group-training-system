@@ -120,6 +120,37 @@ def test_auto_provider_does_not_return_mock_by_default(monkeypatch):
     assert "Demo Customer" not in result.text
 
 
+def test_default_provider_uses_tesseract_when_env_missing(monkeypatch):
+    monkeypatch.delenv("OCR_PROVIDER", raising=False)
+
+    def fake_extract_text_with_ocr(path, preprocessing_mode="original"):
+        return {
+            "ocr_status": "SUCCESS",
+            "extracted_text": "Name: Default Tesseract Customer",
+            "warning": "",
+            "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
+        }
+
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
+
+    result = extract_text_from_upload(b"fake-image", "upload.png")
+
+    assert result.provider == "tesseract"
+    assert result.status == "success"
+    assert result.text == "Name: Default Tesseract Customer"
+
+
+def test_env_provider_can_enable_mock_explicitly(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+
+    result = extract_text_from_upload(b"fake-image", "upload.png")
+
+    assert result.provider == "mock"
+    assert result.is_mock is True
+    assert "Demo Customer" in result.text
+
+
 def test_auto_provider_with_gemini_key_still_uses_tesseract(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
     monkeypatch.delenv("OCR_PROVIDER", raising=False)
@@ -199,6 +230,7 @@ def test_mock_mode_not_affected_by_preprocessing_mode():
 )
 def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, filename, expected_mime):
     captured = {}
+    monkeypatch.setenv("ENABLE_PAID_OCR", "true")
 
     def fake_call(file_bytes, mime_type, api_key):
         captured["file_bytes"] = file_bytes
@@ -224,6 +256,7 @@ def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, filename, expec
 
 
 def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch):
+    monkeypatch.setenv("ENABLE_PAID_OCR", "true")
     monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "")
 
     result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
@@ -235,7 +268,21 @@ def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch):
     assert "Demo Customer" not in result.text
 
 
+def test_gemini_provider_disabled_when_paid_ocr_not_enabled(monkeypatch):
+    monkeypatch.delenv("ENABLE_PAID_OCR", raising=False)
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
+
+    result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
+
+    assert result.provider == "gemini"
+    assert result.status == "unavailable"
+    assert result.cost_mode == "paid"
+    assert "ENABLE_PAID_OCR" in (result.error or "")
+    assert "Demo Customer" not in result.text
+
+
 def test_gemini_provider_unsupported_file_type_does_not_fallback(monkeypatch):
+    monkeypatch.setenv("ENABLE_PAID_OCR", "true")
     monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
 
     result = extract_text_from_upload(b"fake-content", "sample.webp", provider="gemini")
@@ -288,6 +335,31 @@ def test_parser_extracts_english_customer_fields():
     assert structured["email"] == "ada@example.com"
     assert structured["stage"] == "Hot"
     assert structured["next_follow_up_date"] == "2026-06-06"
+
+
+def test_deepseek_structured_extraction_overlays_rule_based_parser(monkeypatch):
+    monkeypatch.setattr(
+        ocr_service,
+        "_call_deepseek_for_ocr",
+        lambda prompt: '{"name":"DeepSeek Customer","phone":"98765432","email":"deepseek@example.com","stage":"Hot","next_follow_up_date":"2026-07-08"}',
+    )
+
+    structured = convert_ocr_text_to_structured_data("Name: Rule Customer\nPhone: 91234567", "customer")
+
+    assert structured["name"] == "DeepSeek Customer"
+    assert structured["phone"] == "98765432"
+    assert structured["email"] == "deepseek@example.com"
+    assert structured["stage"] == "Hot"
+    assert structured["next_follow_up_date"] == "2026-07-08"
+
+
+def test_invalid_deepseek_structured_extraction_keeps_rule_based_parser(monkeypatch):
+    monkeypatch.setattr(ocr_service, "_call_deepseek_for_ocr", lambda prompt: "not json")
+
+    structured = convert_ocr_text_to_structured_data("Name: Rule Customer\nPhone: 91234567", "customer")
+
+    assert structured["name"] == "Rule Customer"
+    assert structured["phone"] == "91234567"
 
 
 def test_convert_daily_log_raw_text_outputs_basic_fields():
