@@ -238,6 +238,28 @@ def _extract_text_with_core_ocr(file_path: Path, preprocessing_mode: str = "orig
         }
     try:
         return extract_text_with_ocr(file_path, preprocessing_mode=preprocessing_mode)
+    except TypeError as exc:
+        if "preprocessing_mode" not in str(exc):
+            return {
+                "ocr_status": "FAILED",
+                "extracted_text": "",
+                "warning": str(exc),
+                "ocr_message": "OCR extraction failed.",
+                "preprocessing_mode": preprocessing_mode,
+            }
+        try:
+            result = extract_text_with_ocr(file_path)
+        except Exception as fallback_exc:
+            return {
+                "ocr_status": "FAILED",
+                "extracted_text": "",
+                "warning": str(fallback_exc),
+                "ocr_message": "OCR extraction failed.",
+                "preprocessing_mode": preprocessing_mode,
+            }
+        result["preprocessing_mode"] = result.get("preprocessing_mode") or preprocessing_mode
+        result["warning"] = "Loaded OCR engine does not support preprocessing_mode; used legacy OCR path."
+        return result
     except Exception as exc:
         return {
             "ocr_status": "FAILED",

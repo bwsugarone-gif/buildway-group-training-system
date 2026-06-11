@@ -1,4 +1,5 @@
 import json
+import inspect
 from io import BytesIO
 from pathlib import Path
 
@@ -13,7 +14,7 @@ from apps.streamlit_group_training.services.ocr_service import (
     get_ocr_provider_label,
     parse_customer_from_ocr_text,
 )
-from core.ocr.ocr_engine import preprocess_image
+from core.ocr.ocr_engine import extract_text_with_ocr, preprocess_image
 from verticals.group_training.models import Customer, CustomerStage, Team, User, UserRole
 from verticals.group_training.services.customer_service import CustomerService
 from verticals.group_training.services.repository import GroupTrainingRepository
@@ -43,6 +44,13 @@ def test_ocr_service_exports_import_compatibility_names():
     assert callable(parse_customer_from_ocr_text)
     assert callable(get_ocr_provider_label)
     assert callable(convert_ocr_text_to_structured_data)
+
+
+def test_core_ocr_signature_accepts_preprocessing_mode():
+    signature = inspect.signature(extract_text_with_ocr)
+
+    assert "preprocessing_mode" in signature.parameters
+    assert signature.parameters["preprocessing_mode"].default == "original"
 
 
 def test_preprocessing_helper_returns_image():
@@ -278,6 +286,34 @@ def test_tesseract_unavailable_does_not_crash_or_fallback_to_mock(monkeypatch):
     assert result.is_mock is False
     assert "Tesseract" in (result.error or "")
     assert "Demo Customer" not in result.text
+
+
+def test_legacy_core_ocr_signature_mismatch_does_not_crash(monkeypatch):
+    def fake_import(name, *args, **kwargs):
+        if name == "core.ocr.ocr_engine":
+            def legacy_extract_text_with_ocr(path):
+                return {
+                    "ocr_status": "SUCCESS",
+                    "extracted_text": "Name: Legacy OCR Customer",
+                    "warning": "",
+                    "ocr_message": "OCR extraction successful",
+                }
+
+            class LegacyModule:
+                extract_text_with_ocr = staticmethod(legacy_extract_text_with_ocr)
+
+            return LegacyModule
+        return original_import(name, *args, **kwargs)
+
+    original_import = __import__
+    monkeypatch.setattr("builtins.__import__", fake_import)
+
+    result = ocr_service._extract_text_with_core_ocr(Path("sample.png"), preprocessing_mode="enhanced")
+
+    assert result["ocr_status"] == "SUCCESS"
+    assert result["extracted_text"] == "Name: Legacy OCR Customer"
+    assert result["preprocessing_mode"] == "enhanced"
+    assert "legacy OCR path" in result["warning"]
 
 
 def test_ocr_i18n_keys_match_between_locales():

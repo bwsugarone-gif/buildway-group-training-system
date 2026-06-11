@@ -100,14 +100,15 @@ def _pdf2image_available() -> bool:
         return False
 
 
-def _ocr_image(image: Image.Image, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> str:
+def _ocr_image(image_or_path: Image.Image | str | Path, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> str:
     """Run Tesseract OCR on a PIL Image."""
     import pytesseract
+    image = Image.open(image_or_path) if isinstance(image_or_path, (str, Path)) else image_or_path
     prepared = preprocess_image(image, preprocessing_mode)
     return pytesseract.image_to_string(prepared, lang=lang)
 
 
-def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> dict[str, Any]:
+def extract_text_with_ocr(file_path: str | Path, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> dict[str, Any]:
     """
     Main entry point. Extracts text from PDF or image file.
     Falls back to OCR if selectable text is insufficient.
