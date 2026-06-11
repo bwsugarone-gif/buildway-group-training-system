@@ -160,6 +160,28 @@ def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypat
     assert "Demo Customer" not in result.text
 
 
+def test_tesseract_unavailable_does_not_crash_or_fallback_to_mock(monkeypatch):
+    monkeypatch.delenv("OCR_PROVIDER", raising=False)
+
+    def fake_unavailable(path):
+        return {
+            "ocr_status": "UNAVAILABLE",
+            "extracted_text": "",
+            "warning": "tesseract is not installed",
+            "ocr_message": "OCR is unavailable.",
+        }
+
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_unavailable)
+
+    result = extract_text_from_upload(b"fake-image", "upload.png", provider="auto")
+
+    assert result.provider == "unavailable"
+    assert result.status == "unavailable"
+    assert result.is_mock is False
+    assert "Tesseract" in (result.error or "")
+    assert "Demo Customer" not in result.text
+
+
 def test_ocr_i18n_keys_match_between_locales():
     zh = json.loads((I18N_DIR / "zh_HK.json").read_text(encoding="utf-8"))
     en = json.loads((I18N_DIR / "en.json").read_text(encoding="utf-8"))
