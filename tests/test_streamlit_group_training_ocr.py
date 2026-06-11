@@ -7,6 +7,10 @@ import pytest
 from PIL import Image
 
 from apps.streamlit_group_training.services import ocr_service
+from apps.streamlit_group_training.app import (
+    calculate_ocr_field_confidence,
+    ocr_requires_manual_contact_confirmation,
+)
 from apps.streamlit_group_training.services.ocr_service import (
     OCRUploadResult,
     convert_ocr_text_to_structured_data,
@@ -435,6 +439,45 @@ def test_invalid_deepseek_structured_extraction_keeps_rule_based_parser(monkeypa
 
     assert structured["name"] == "Rule Customer"
     assert structured["phone"] == "91234567"
+
+
+def test_ocr_confidence_marks_valid_contact_fields_high():
+    structured = {
+        "name": "Ada Chan",
+        "phone": "91234567",
+        "email": "ada@example.com",
+        "stage": "Hot",
+        "source": "",
+        "notes": "",
+        "next_action": "",
+        "next_follow_up_date": "2026-06-06",
+    }
+    raw_text = "Name: Ada Chan\nPhone: 91234567\nEmail: ada@example.com\nStage: Hot\nNext Follow Up: 2026-06-06"
+
+    confidence = calculate_ocr_field_confidence("customer", structured, raw_text)
+
+    assert confidence["phone"] == "high"
+    assert confidence["email"] == "high"
+    assert ocr_requires_manual_contact_confirmation(confidence) is False
+
+
+def test_ocr_confidence_blocks_low_contact_fields_until_manual_review():
+    structured = {
+        "name": "Ada Chan",
+        "phone": "123",
+        "email": "not-an-email",
+        "stage": "Hot",
+        "source": "",
+        "notes": "",
+        "next_action": "",
+        "next_follow_up_date": "",
+    }
+
+    confidence = calculate_ocr_field_confidence("customer", structured, "Name: Ada Chan")
+
+    assert confidence["phone"] == "low"
+    assert confidence["email"] == "low"
+    assert ocr_requires_manual_contact_confirmation(confidence) is True
 
 
 def test_convert_daily_log_raw_text_outputs_basic_fields():

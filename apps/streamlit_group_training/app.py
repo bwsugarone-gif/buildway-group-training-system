@@ -8,6 +8,7 @@ Run with:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -1790,9 +1791,67 @@ def ocr_missing_fields(data_type: str, structured: dict) -> list[str]:
     return [field for field in required if not structured.get(field)]
 
 
-def render_ocr_customer_form(user, locale: str, structured: dict) -> None:
+def ocr_confidence_fields(data_type: str) -> list[str]:
+    return {
+        "customer": ["name", "phone", "email", "stage", "source", "notes", "next_action", "next_follow_up_date"],
+        "daily_log": [
+            "customer_name",
+            "activity_type",
+            "activity_date",
+            "call_count",
+            "whatsapp_count",
+            "appointment_count",
+            "meeting_count",
+            "closed_count",
+            "notes",
+        ],
+        "follow_up_note": ["customer_name", "notes", "next_action", "next_follow_up_date"],
+    }.get(data_type, [])
+
+
+def calculate_ocr_field_confidence(data_type: str, structured: dict, raw_text: str) -> dict[str, str]:
+    raw_lower = (raw_text or "").lower()
+    confidence: dict[str, str] = {}
+    for field in ocr_confidence_fields(data_type):
+        value = structured.get(field)
+        value_text = str(value or "").strip()
+        if not value_text:
+            confidence[field] = "low"
+            continue
+        if field == "phone":
+            digits = re.sub(r"\D", "", value_text)
+            confidence[field] = "high" if len(digits) == 8 and value_text.lower() in raw_lower else "medium" if len(digits) >= 7 else "low"
+            continue
+        if field == "email":
+            valid_email = bool(re.fullmatch(r"[\w.\-+]+@[\w.\-]+\.\w+", value_text))
+            confidence[field] = "high" if valid_email and value_text.lower() in raw_lower else "medium" if valid_email else "low"
+            continue
+        if field in {"next_follow_up_date", "activity_date"}:
+            confidence[field] = "high" if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value_text) and value_text in raw_text else "medium"
+            continue
+        if field.endswith("_count"):
+            confidence[field] = "high" if str(value_text) in raw_text else "medium"
+            continue
+        confidence[field] = "high" if value_text.lower() in raw_lower else "medium"
+    return confidence
+
+
+def render_ocr_field_confidence(locale: str, confidence: dict[str, str], field: str) -> None:
+    level = confidence.get(field, "low")
+    label = t(locale, f"ocr.confidence.{level}")
+    st.caption(t(locale, "ocr.field_confidence", level=label))
+    if level == "low":
+        st.warning(t(locale, "ocr.low_confidence_warning"))
+
+
+def ocr_requires_manual_contact_confirmation(confidence: dict[str, str]) -> bool:
+    return confidence.get("phone") == "low" or confidence.get("email") == "low"
+
+
+def render_ocr_customer_form(user, locale: str, structured: dict, confidence: dict[str, str] | None = None) -> None:
     repo = get_repo()
     service = CustomerService(repo)
+    confidence = confidence or {}
     agents = visible_agents(repo, user)
     agent_options = {f"{agent.name} ({agent.email})": agent for agent in agents}
     stage_labels = {translated_stage(locale, stage.value): stage.value for stage in CustomerStage}
@@ -1802,26 +1861,41 @@ def render_ocr_customer_form(user, locale: str, structured: dict) -> None:
     with st.form("ocr_customer_confirm_form"):
         st.markdown(t(locale, "ocr.edit_before_save"))
         name = st.text_input(t(locale, "customer.name"), value=structured.get("name", ""))
+        render_ocr_field_confidence(locale, confidence, "name")
         phone = st.text_input(t(locale, "customer.phone"), value=structured.get("phone", ""))
+        render_ocr_field_confidence(locale, confidence, "phone")
         email = st.text_input(t(locale, "ocr.email"), value=structured.get("email", ""))
+        render_ocr_field_confidence(locale, confidence, "email")
         selected_stage = st.selectbox(
             t(locale, "customer.stage"),
             list(stage_labels.keys()),
             index=list(stage_labels.keys()).index(default_stage_label) if default_stage_label in stage_labels else 0,
             key=f"ocr_customer_stage_{user.id}",
         )
+        render_ocr_field_confidence(locale, confidence, "stage")
         source = st.text_input(t(locale, "ocr.source"), value=structured.get("source", ""))
+        render_ocr_field_confidence(locale, confidence, "source")
         next_meeting = st.date_input(
             t(locale, "ocr.next_follow_up_date"),
             value=parse_iso_date_or_today(structured.get("next_follow_up_date", "")),
         )
+        render_ocr_field_confidence(locale, confidence, "next_follow_up_date")
         notes = st.text_area(t(locale, "customer.notes"), value=structured.get("notes", ""))
+        render_ocr_field_confidence(locale, confidence, "notes")
         next_action = st.text_input(t(locale, "customer.next_action"), value=structured.get("next_action", ""))
+        render_ocr_field_confidence(locale, confidence, "next_action")
         selected_agent_label = None
         if user.role != UserRole.AGENT and agent_options:
             selected_agent_label = st.selectbox(t(locale, "customer.agent"), list(agent_options.keys()), key=f"ocr_customer_agent_{user.id}")
+        contact_confirmation_required = ocr_requires_manual_contact_confirmation(confidence)
+        manual_contact_confirmed = True
+        if contact_confirmation_required:
+            manual_contact_confirmed = st.checkbox(t(locale, "ocr.manual_contact_confirm"), key=f"ocr_manual_contact_confirm_{user.id}")
         confirm = st.form_submit_button(t(locale, "ocr.confirm_save"))
     if confirm:
+        if ocr_requires_manual_contact_confirmation(confidence) and not manual_contact_confirmed:
+            st.warning(t(locale, "ocr.manual_contact_required"))
+            return
         agent = user if user.role == UserRole.AGENT else agent_options[selected_agent_label]
         saved_notes = combine_notes(
             notes,
@@ -1839,22 +1913,32 @@ def render_ocr_customer_form(user, locale: str, structured: dict) -> None:
         st.rerun()
 
 
-def render_ocr_daily_log_form(user, locale: str, structured: dict) -> None:
+def render_ocr_daily_log_form(user, locale: str, structured: dict, confidence: dict[str, str] | None = None) -> None:
     repo = get_repo()
     service = DailyLogService(repo)
+    confidence = confidence or {}
     agents = visible_agents(repo, user)
     agent_options = {f"{agent.name} ({agent.email})": agent for agent in agents}
     with st.form("ocr_daily_log_confirm_form"):
         st.markdown(t(locale, "ocr.edit_before_save"))
         customer_name = st.text_input(t(locale, "ocr.customer_name"), value=structured.get("customer_name", ""))
+        render_ocr_field_confidence(locale, confidence, "customer_name")
         activity_type = st.text_input(t(locale, "ocr.activity_type"), value=structured.get("activity_type", ""))
+        render_ocr_field_confidence(locale, confidence, "activity_type")
         activity_date = st.date_input(t(locale, "daily.date"), value=parse_iso_date_or_today(structured.get("activity_date", "")))
+        render_ocr_field_confidence(locale, confidence, "activity_date")
         call_count = st.number_input(t(locale, "daily.call_count"), min_value=0, value=int(structured.get("call_count") or 0))
+        render_ocr_field_confidence(locale, confidence, "call_count")
         whatsapp_count = st.number_input(t(locale, "daily.whatsapp_count"), min_value=0, value=int(structured.get("whatsapp_count") or 0))
+        render_ocr_field_confidence(locale, confidence, "whatsapp_count")
         appointment_count = st.number_input(t(locale, "daily.appointment_count"), min_value=0, value=int(structured.get("appointment_count") or 0))
+        render_ocr_field_confidence(locale, confidence, "appointment_count")
         meeting_count = st.number_input(t(locale, "daily.meeting_count"), min_value=0, value=int(structured.get("meeting_count") or 0))
+        render_ocr_field_confidence(locale, confidence, "meeting_count")
         closed_count = st.number_input(t(locale, "daily.closing_count"), min_value=0, value=int(structured.get("closed_count") or 0))
+        render_ocr_field_confidence(locale, confidence, "closed_count")
         notes = st.text_area(t(locale, "daily.notes"), value=structured.get("notes", ""))
+        render_ocr_field_confidence(locale, confidence, "notes")
         selected_agent_label = None
         if user.role != UserRole.AGENT and agent_options:
             selected_agent_label = st.selectbox(t(locale, "daily.agent"), list(agent_options.keys()), key=f"ocr_daily_agent_{user.id}")
@@ -1885,9 +1969,10 @@ def render_ocr_daily_log_form(user, locale: str, structured: dict) -> None:
         st.rerun()
 
 
-def render_ocr_follow_up_form(user, locale: str, structured: dict) -> None:
+def render_ocr_follow_up_form(user, locale: str, structured: dict, confidence: dict[str, str] | None = None) -> None:
     repo = get_repo()
     service = CustomerService(repo)
+    confidence = confidence or {}
     customers = repo.list_customers(TENANT_ID, agent_id=user.id if user.role == UserRole.AGENT else None)
     if not customers:
         st.warning(t(locale, "ocr.follow_up_customer_missing"))
@@ -1906,11 +1991,14 @@ def render_ocr_follow_up_form(user, locale: str, structured: dict) -> None:
             key=f"ocr_followup_customer_{user.id}",
         )
         note = st.text_area(t(locale, "customer.followup_note"), value=structured.get("notes", ""))
+        render_ocr_field_confidence(locale, confidence, "notes")
         next_action = st.text_input(t(locale, "customer.next_action"), value=structured.get("next_action", ""))
+        render_ocr_field_confidence(locale, confidence, "next_action")
         follow_up_date = st.date_input(
             t(locale, "ocr.next_follow_up_date"),
             value=parse_iso_date_or_today(structured.get("next_follow_up_date", "")),
         )
+        render_ocr_field_confidence(locale, confidence, "next_follow_up_date")
         confirm = st.form_submit_button(t(locale, "ocr.confirm_save"))
     if confirm:
         saved_action = combine_notes(next_action, f"{t(locale, 'ocr.next_follow_up_date')}: {follow_up_date.isoformat()}")
@@ -1995,6 +2083,7 @@ def ocr_capture_page(user, locale: str) -> None:
         elif extraction.status == "unsupported":
             st.warning(t(locale, "ocr.extract_failed", error=extraction.error or ""))
         structured = convert_ocr_text_to_structured_data(extraction.text, selected_data_type)
+        confidence = calculate_ocr_field_confidence(selected_data_type, structured, extraction.text)
         st.session_state["ocr_result"] = {
             "data_type": selected_data_type,
             "raw_text": extraction.text,
@@ -2004,6 +2093,7 @@ def ocr_capture_page(user, locale: str) -> None:
             "preprocessing_mode": extraction.preprocessing_mode,
             "cost_mode": extraction.cost_mode,
             "structured": structured,
+            "confidence": confidence,
         }
 
     result = st.session_state.get("ocr_result")
@@ -2019,12 +2109,13 @@ def ocr_capture_page(user, locale: str) -> None:
     if missing:
         st.warning(t(locale, "ocr.missing_fields", fields=", ".join(t(locale, f"ocr.field.{field}") for field in missing)))
 
+    confidence = result.get("confidence", {})
     if result["data_type"] == "daily_log":
-        render_ocr_daily_log_form(user, locale, result["structured"])
+        render_ocr_daily_log_form(user, locale, result["structured"], confidence)
     elif result["data_type"] == "follow_up_note":
-        render_ocr_follow_up_form(user, locale, result["structured"])
+        render_ocr_follow_up_form(user, locale, result["structured"], confidence)
     else:
-        render_ocr_customer_form(user, locale, result["structured"])
+        render_ocr_customer_form(user, locale, result["structured"], confidence)
 
 
 def today_schedule_page(user, locale: str) -> None:
