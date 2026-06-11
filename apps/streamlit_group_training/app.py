@@ -1773,6 +1773,14 @@ def ocr_data_type_options(locale: str) -> dict[str, str]:
     }
 
 
+def ocr_preprocessing_options(locale: str) -> dict[str, str]:
+    return {
+        t(locale, "ocr.preprocessing.original"): "original",
+        t(locale, "ocr.preprocessing.enhanced"): "enhanced",
+        t(locale, "ocr.preprocessing.high_contrast"): "high_contrast",
+    }
+
+
 def ocr_missing_fields(data_type: str, structured: dict) -> list[str]:
     required = {
         "customer": ["name", "stage"],
@@ -1945,6 +1953,13 @@ def ocr_capture_page(user, locale: str) -> None:
     data_type_options = ocr_data_type_options(locale)
     selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()), key=f"ocr_data_type_{user.id}")
     selected_data_type = data_type_options[selected_data_type_label]
+    preprocessing_options = ocr_preprocessing_options(locale)
+    selected_preprocessing_label = st.selectbox(
+        t(locale, "ocr.preprocessing_mode"),
+        list(preprocessing_options.keys()),
+        key=f"ocr_preprocessing_mode_{user.id}",
+    )
+    selected_preprocessing_mode = preprocessing_options[selected_preprocessing_label]
 
     file_bytes = b""
     if uploaded_file:
@@ -1967,7 +1982,12 @@ def ocr_capture_page(user, locale: str) -> None:
             st.info(t(locale, "ocr.non_image_received"))
 
     if st.button(t(locale, "ocr.start_extract"), disabled=not bool(file_bytes), key=f"ocr_start_extract_{user.id}"):
-        extraction = extract_text_from_upload(file_bytes, uploaded_file.name, provider="auto")
+        extraction = extract_text_from_upload(
+            file_bytes,
+            uploaded_file.name,
+            provider="auto",
+            preprocessing_mode=selected_preprocessing_mode,
+        )
         if extraction.status in {"failed", "unavailable"}:
             st.error(t(locale, "ocr.extract_failed", error=extraction.error or ""))
         elif extraction.status == "unsupported":
@@ -1979,6 +1999,7 @@ def ocr_capture_page(user, locale: str) -> None:
             "provider": extraction.provider,
             "status": extraction.status,
             "error": extraction.error,
+            "preprocessing_mode": extraction.preprocessing_mode,
             "structured": structured,
         }
 
@@ -1987,6 +2008,7 @@ def ocr_capture_page(user, locale: str) -> None:
         return
     st.caption(t(locale, "ocr.provider", provider=result["provider"]))
     st.caption(t(locale, "ocr.status", status=result.get("status", "")))
+    st.caption(t(locale, "ocr.preprocessing_result", mode=t(locale, f"ocr.preprocessing.{result.get('preprocessing_mode', 'original')}")))
     st.markdown(t(locale, "ocr.raw_text"))
     st.text_area(t(locale, "ocr.raw_text"), value=result["raw_text"], height=160, disabled=True, label_visibility="collapsed")
     st.markdown(t(locale, "ocr.structured_result"))

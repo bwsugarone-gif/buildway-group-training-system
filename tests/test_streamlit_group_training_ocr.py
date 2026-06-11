@@ -1,7 +1,9 @@
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from apps.streamlit_group_training.services import ocr_service
 from apps.streamlit_group_training.services.ocr_service import (
@@ -11,6 +13,7 @@ from apps.streamlit_group_training.services.ocr_service import (
     get_ocr_provider_label,
     parse_customer_from_ocr_text,
 )
+from core.ocr.ocr_engine import preprocess_image
 from verticals.group_training.models import Customer, CustomerStage, Team, User, UserRole
 from verticals.group_training.services.customer_service import CustomerService
 from verticals.group_training.services.repository import GroupTrainingRepository
@@ -19,12 +22,61 @@ from verticals.group_training.services.repository import GroupTrainingRepository
 I18N_DIR = Path(__file__).resolve().parents[1] / "apps" / "streamlit_group_training" / "i18n"
 
 
+def _sample_image() -> Image.Image:
+    image = Image.new("RGB", (12, 8), "white")
+    for x in range(image.width):
+        for y in range(image.height):
+            value = 40 if (x + y) % 2 else 220
+            image.putpixel((x, y), (value, value, value))
+    return image
+
+
+def _image_bytes(image: Image.Image) -> bytes:
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def test_ocr_service_exports_import_compatibility_names():
     assert OCRUploadResult
     assert callable(extract_text_from_upload)
     assert callable(parse_customer_from_ocr_text)
     assert callable(get_ocr_provider_label)
     assert callable(convert_ocr_text_to_structured_data)
+
+
+def test_preprocessing_helper_returns_image():
+    processed = preprocess_image(_sample_image(), "enhanced")
+
+    assert isinstance(processed, Image.Image)
+
+
+def test_original_preprocessing_mode_no_processing():
+    image = _sample_image()
+    processed = preprocess_image(image, "original")
+
+    assert processed is image
+    assert processed.size == image.size
+
+
+def test_enhanced_preprocessing_mode_increases_size():
+    image = _sample_image()
+    processed = preprocess_image(image, "enhanced")
+
+    assert processed.size[0] == image.size[0] * 2
+    assert processed.size[1] == image.size[1] * 2
+    assert processed.mode == "L"
+
+
+def test_high_contrast_preprocessing_mode_returns_binary_like_image():
+    image = _sample_image()
+    processed = preprocess_image(image, "high_contrast")
+    non_empty_bins = {idx for idx, count in enumerate(processed.histogram()) if count}
+
+    assert processed.size[0] == image.size[0] * 3
+    assert processed.size[1] == image.size[1] * 3
+    assert processed.mode == "L"
+    assert non_empty_bins.issubset({0, 255})
 
 
 def test_mock_provider_explicitly_returns_mock_result():
@@ -39,12 +91,13 @@ def test_mock_provider_explicitly_returns_mock_result():
 def test_auto_provider_does_not_return_mock_by_default(monkeypatch):
     monkeypatch.delenv("OCR_PROVIDER", raising=False)
 
-    def fake_extract_text_with_ocr(path):
+    def fake_extract_text_with_ocr(path, preprocessing_mode="original"):
         return {
             "ocr_status": "SUCCESS",
             "extracted_text": "Name: Ada Chan\nPhone: 91234567",
             "warning": "",
             "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
         }
 
     monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
@@ -55,6 +108,46 @@ def test_auto_provider_does_not_return_mock_by_default(monkeypatch):
     assert result.status == "success"
     assert result.is_mock is False
     assert "Demo Customer" not in result.text
+
+
+def test_upload_flow_passes_preprocessing_mode(monkeypatch):
+    captured = {}
+
+    def fake_extract_text_with_ocr(path, preprocessing_mode="original"):
+        captured["preprocessing_mode"] = preprocessing_mode
+        return {
+            "ocr_status": "SUCCESS",
+            "extracted_text": "Name: Enhanced Customer",
+            "warning": "",
+            "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
+        }
+
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
+
+    result = extract_text_from_upload(
+        _image_bytes(_sample_image()),
+        "upload.png",
+        provider="auto",
+        preprocessing_mode="enhanced",
+    )
+
+    assert captured["preprocessing_mode"] == "enhanced"
+    assert result.preprocessing_mode == "enhanced"
+    assert result.text == "Name: Enhanced Customer"
+
+
+def test_mock_mode_not_affected_by_preprocessing_mode():
+    result = extract_text_from_upload(
+        b"fake-image",
+        "upload.png",
+        provider="mock",
+        preprocessing_mode="high_contrast",
+    )
+
+    assert result.provider == "mock"
+    assert result.preprocessing_mode == "original"
+    assert "Demo Customer" in result.text
 
 
 @pytest.mark.parametrize("filename", ["customers.csv", "customers.xlsx"])
@@ -119,8 +212,9 @@ def test_convert_daily_log_raw_text_outputs_basic_fields():
 def test_tesseract_adapter_can_be_mocked_without_real_tesseract(monkeypatch):
     captured = {}
 
-    def fake_extract_text_with_ocr(path):
+    def fake_extract_text_with_ocr(path, preprocessing_mode="original"):
         captured["path"] = Path(path)
+        captured["preprocessing_mode"] = preprocessing_mode
         assert captured["path"].exists()
         assert captured["path"].suffix == ".png"
         return {
@@ -128,6 +222,7 @@ def test_tesseract_adapter_can_be_mocked_without_real_tesseract(monkeypatch):
             "extracted_text": "Name: OCR Customer",
             "warning": "",
             "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
         }
 
     monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
@@ -138,17 +233,19 @@ def test_tesseract_adapter_can_be_mocked_without_real_tesseract(monkeypatch):
     assert result.status == "success"
     assert result.text == "Name: OCR Customer"
     assert captured["path"].exists() is False
+    assert captured["preprocessing_mode"] == "original"
 
 
 def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
 
-    def fake_extract_text_with_ocr(path):
+    def fake_extract_text_with_ocr(path, preprocessing_mode="original"):
         return {
             "ocr_status": "SUCCESS",
             "extracted_text": "Name: Real OCR Customer",
             "warning": "",
             "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
         }
 
     monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_extract_text_with_ocr)
@@ -163,12 +260,13 @@ def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypat
 def test_tesseract_unavailable_does_not_crash_or_fallback_to_mock(monkeypatch):
     monkeypatch.delenv("OCR_PROVIDER", raising=False)
 
-    def fake_unavailable(path):
+    def fake_unavailable(path, preprocessing_mode="original"):
         return {
             "ocr_status": "UNAVAILABLE",
             "extracted_text": "",
             "warning": "tesseract is not installed",
             "ocr_message": "OCR is unavailable.",
+            "preprocessing_mode": preprocessing_mode,
         }
 
     monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_unavailable)
@@ -191,6 +289,7 @@ def test_ocr_i18n_keys_match_between_locales():
     assert "ocr.title" in ocr_keys
     assert "ocr.confirm_save" in ocr_keys
     assert "ocr.status" in ocr_keys
+    assert "ocr.preprocessing_mode" in ocr_keys
 
 
 def test_ocr_follow_up_save_cannot_cross_tenant():

@@ -13,6 +13,7 @@ from typing import Any
 
 SUPPORTED_OCR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"}
 UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
 OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
 
 
@@ -23,6 +24,7 @@ class OCRUploadResult:
     text: str
     error: str | None = None
     is_mock: bool = False
+    preprocessing_mode: str = "original"
 
 
 CUSTOMER_FIELDS = {
@@ -104,24 +106,37 @@ STAGE_ALIASES = {
 }
 
 
-def extract_text_from_upload(file_bytes: bytes, filename: str, provider: str = "auto") -> OCRUploadResult:
+def extract_text_from_upload(
+    file_bytes: bytes,
+    filename: str,
+    provider: str = "auto",
+    preprocessing_mode: str = "original",
+) -> OCRUploadResult:
     """Extract OCR text from uploaded bytes using an explicit or configured provider."""
     requested_provider = (provider or os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
     if requested_provider == "auto":
         requested_provider = (os.environ.get("OCR_PROVIDER") or "auto").strip().lower()
+    normalized_preprocessing = _normalize_preprocessing_mode(preprocessing_mode)
 
     if requested_provider == "mock":
         return _mock_ocr_result()
 
     suffix = Path(filename or "").suffix.lower()
     if not file_bytes:
-        return OCRUploadResult(provider="unavailable", status="empty", text="", error="empty_upload")
+        return OCRUploadResult(
+            provider="unavailable",
+            status="empty",
+            text="",
+            error="empty_upload",
+            preprocessing_mode=normalized_preprocessing,
+        )
     if suffix in UNSUPPORTED_UPLOAD_EXTENSIONS or suffix not in SUPPORTED_OCR_EXTENSIONS:
         return OCRUploadResult(
             provider="unsupported",
             status="unsupported",
             text="",
             error=f"Unsupported file type: {suffix or 'unknown'}",
+            preprocessing_mode=normalized_preprocessing,
         )
     if requested_provider not in {"auto", "tesseract"}:
         return OCRUploadResult(
@@ -129,9 +144,10 @@ def extract_text_from_upload(file_bytes: bytes, filename: str, provider: str = "
             status="unsupported",
             text="",
             error=f"Unsupported OCR provider: {requested_provider}",
+            preprocessing_mode=normalized_preprocessing,
         )
 
-    return _extract_with_tesseract(file_bytes, suffix)
+    return _extract_with_tesseract(file_bytes, suffix, normalized_preprocessing)
 
 
 def extract_text_from_image(image_bytes: bytes) -> dict[str, Any]:
@@ -166,37 +182,49 @@ def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
     return normalized_provider or "unavailable"
 
 
-def _extract_with_tesseract(file_bytes: bytes, suffix: str) -> OCRUploadResult:
+def _normalize_preprocessing_mode(mode: str) -> str:
+    normalized = (mode or "original").strip().lower()
+    return normalized if normalized in OCR_PREPROCESSING_MODES else "original"
+
+
+def _extract_with_tesseract(file_bytes: bytes, suffix: str, preprocessing_mode: str) -> OCRUploadResult:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(file_bytes)
             temp_path = Path(temp_file.name)
 
-        extraction = _extract_text_with_core_ocr(temp_path)
+        extraction = _extract_text_with_core_ocr(temp_path, preprocessing_mode=preprocessing_mode)
         status = str(extraction.get("ocr_status") or "failed").lower()
         text = str(extraction.get("extracted_text") or "")
         warning = str(extraction.get("warning") or "")
         message = str(extraction.get("ocr_message") or "")
+        result_preprocessing = str(extraction.get("preprocessing_mode") or preprocessing_mode)
 
         if status in {"success", "skipped_selectable"}:
-            return OCRUploadResult(provider="tesseract", status="success", text=text, error=None)
+            return OCRUploadResult(provider="tesseract", status="success", text=text, error=None, preprocessing_mode=result_preprocessing)
         if status == "empty":
-            return OCRUploadResult(provider="tesseract", status="empty", text="", error=message or None)
+            return OCRUploadResult(provider="tesseract", status="empty", text="", error=message or None, preprocessing_mode=result_preprocessing)
         if status == "unavailable":
             error = f"{OCR_UNAVAILABLE_ERROR} {warning}".strip() if warning else OCR_UNAVAILABLE_ERROR
-            return OCRUploadResult(provider="unavailable", status="unavailable", text=text, error=error)
+            return OCRUploadResult(provider="unavailable", status="unavailable", text=text, error=error, preprocessing_mode=result_preprocessing)
         if status == "unsupported":
-            return OCRUploadResult(provider="unsupported", status="unsupported", text=text, error=message or warning or None)
-        return OCRUploadResult(provider="tesseract", status="failed", text=text, error=warning or message or "OCR failed")
+            return OCRUploadResult(provider="unsupported", status="unsupported", text=text, error=message or warning or None, preprocessing_mode=result_preprocessing)
+        return OCRUploadResult(
+            provider="tesseract",
+            status="failed",
+            text=text,
+            error=warning or message or "OCR failed",
+            preprocessing_mode=result_preprocessing,
+        )
     except Exception as exc:
-        return OCRUploadResult(provider="tesseract", status="failed", text="", error=str(exc))
+        return OCRUploadResult(provider="tesseract", status="failed", text="", error=str(exc), preprocessing_mode=preprocessing_mode)
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
 
 
-def _extract_text_with_core_ocr(file_path: Path) -> dict[str, Any]:
+def _extract_text_with_core_ocr(file_path: Path, preprocessing_mode: str = "original") -> dict[str, Any]:
     """Lazy-load the core OCR engine so missing OCR deps cannot crash app startup."""
     try:
         from core.ocr.ocr_engine import extract_text_with_ocr
@@ -206,15 +234,17 @@ def _extract_text_with_core_ocr(file_path: Path) -> dict[str, Any]:
             "extracted_text": "",
             "warning": str(exc),
             "ocr_message": OCR_UNAVAILABLE_ERROR,
+            "preprocessing_mode": preprocessing_mode,
         }
     try:
-        return extract_text_with_ocr(file_path)
+        return extract_text_with_ocr(file_path, preprocessing_mode=preprocessing_mode)
     except Exception as exc:
         return {
             "ocr_status": "FAILED",
             "extracted_text": "",
             "warning": str(exc),
             "ocr_message": "OCR extraction failed.",
+            "preprocessing_mode": preprocessing_mode,
         }
 
 

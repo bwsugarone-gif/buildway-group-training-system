@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Any
 
 import pypdf
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 
 
 MAX_OCR_PDF_PAGES = 20
+OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
 OCR_UNAVAILABLE_MESSAGE = "OCR is unavailable. Please provide a text-selectable PDF."
 OCR_FAILED_MESSAGE = "OCR extraction failed. Please provide a clearer document."
 OCR_SUCCESS_MESSAGE = "OCR extraction successful"
@@ -41,6 +42,32 @@ def _base_result(file_path: Path, file_type: str) -> dict[str, Any]:
 
 def _normalise_text(text: str) -> str:
     return "\n".join(line.strip() for line in str(text or "").splitlines() if line.strip())
+
+
+def _resample_filter() -> int:
+    return getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+
+
+def preprocess_image(image: Image.Image, mode: str = "original") -> Image.Image:
+    """Prepare an image for Tesseract while preserving the original mode option."""
+    normalized_mode = (mode or "original").strip().lower()
+    if normalized_mode not in OCR_PREPROCESSING_MODES:
+        normalized_mode = "original"
+    if normalized_mode == "original":
+        return image
+
+    scale = 3 if normalized_mode == "high_contrast" else 2
+    resized = image.resize((image.width * scale, image.height * scale), _resample_filter())
+    grayscale = resized.convert("L")
+
+    if normalized_mode == "enhanced":
+        contrasted = ImageEnhance.Contrast(grayscale).enhance(1.8)
+        sharpened = contrasted.filter(ImageFilter.SHARPEN)
+        return sharpened
+
+    sharpened = grayscale.filter(ImageFilter.SHARPEN)
+    contrasted = ImageEnhance.Contrast(sharpened).enhance(2.2)
+    return contrasted.point(lambda pixel: 255 if pixel >= 160 else 0)
 
 
 def extract_selectable_pdf_text(file_path: Path, max_pages: int | None = None) -> tuple[str, int]:
@@ -73,13 +100,14 @@ def _pdf2image_available() -> bool:
         return False
 
 
-def _ocr_image(image: Image.Image, lang: str = "chi_tra+eng") -> str:
+def _ocr_image(image: Image.Image, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> str:
     """Run Tesseract OCR on a PIL Image."""
     import pytesseract
-    return pytesseract.image_to_string(image, lang=lang)
+    prepared = preprocess_image(image, preprocessing_mode)
+    return pytesseract.image_to_string(prepared, lang=lang)
 
 
-def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng") -> dict[str, Any]:
+def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> dict[str, Any]:
     """
     Main entry point. Extracts text from PDF or image file.
     Falls back to OCR if selectable text is insufficient.
@@ -87,6 +115,10 @@ def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng") -> dict[st
     file_path = Path(file_path)
     suffix = file_path.suffix.lower()
     result = _base_result(file_path, suffix)
+    normalized_preprocessing = (preprocessing_mode or "original").strip().lower()
+    if normalized_preprocessing not in OCR_PREPROCESSING_MODES:
+        normalized_preprocessing = "original"
+    result["preprocessing_mode"] = normalized_preprocessing
 
     # ── Image files ───────────────────────────────────────────────────────────
     if suffix in {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}:
@@ -98,7 +130,7 @@ def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng") -> dict[st
             return result
         try:
             img = Image.open(file_path)
-            text = _normalise_text(_ocr_image(img, lang=lang))
+            text = _normalise_text(_ocr_image(img, lang=lang, preprocessing_mode=normalized_preprocessing))
             result["extracted_text"] = text
             result["ocr_used"] = True
             result["ocr_page_count"] = 1
@@ -151,7 +183,7 @@ def extract_text_with_ocr(file_path: Path, lang: str = "chi_tra+eng") -> dict[st
                 )
                 parts = []
                 for idx, img in enumerate(images, 1):
-                    text = _normalise_text(_ocr_image(img, lang=lang))
+                    text = _normalise_text(_ocr_image(img, lang=lang, preprocessing_mode=normalized_preprocessing))
                     if text:
                         parts.append(f"[Page {idx}]\n{text}")
 
