@@ -1781,6 +1781,14 @@ def ocr_preprocessing_options(locale: str) -> dict[str, str]:
     }
 
 
+def ocr_provider_options(locale: str) -> dict[str, str]:
+    return {
+        t(locale, "ocr.provider_option.tesseract"): "tesseract",
+        t(locale, "ocr.provider_option.gemini"): "gemini",
+        t(locale, "ocr.provider_option.mock"): "mock",
+    }
+
+
 def ocr_missing_fields(data_type: str, structured: dict) -> list[str]:
     required = {
         "customer": ["name", "stage"],
@@ -1953,6 +1961,13 @@ def ocr_capture_page(user, locale: str) -> None:
     data_type_options = ocr_data_type_options(locale)
     selected_data_type_label = st.selectbox(t(locale, "ocr.data_type"), list(data_type_options.keys()), key=f"ocr_data_type_{user.id}")
     selected_data_type = data_type_options[selected_data_type_label]
+    provider_options = ocr_provider_options(locale)
+    selected_provider_label = st.radio(
+        t(locale, "ocr.mode"),
+        list(provider_options.keys()),
+        key=f"ocr_provider_mode_{user.id}",
+    )
+    selected_ocr_provider = provider_options[selected_provider_label]
     preprocessing_options = ocr_preprocessing_options(locale)
     selected_preprocessing_label = st.selectbox(
         t(locale, "ocr.preprocessing_mode"),
@@ -1985,7 +2000,7 @@ def ocr_capture_page(user, locale: str) -> None:
         extraction = extract_text_from_upload(
             file_bytes,
             uploaded_file.name,
-            provider="auto",
+            provider=selected_ocr_provider,
             preprocessing_mode=selected_preprocessing_mode,
         )
         if extraction.status in {"failed", "unavailable"}:
@@ -2000,6 +2015,7 @@ def ocr_capture_page(user, locale: str) -> None:
             "status": extraction.status,
             "error": extraction.error,
             "preprocessing_mode": extraction.preprocessing_mode,
+            "cost_mode": extraction.cost_mode,
             "structured": structured,
         }
 
@@ -2008,6 +2024,7 @@ def ocr_capture_page(user, locale: str) -> None:
         return
     st.caption(t(locale, "ocr.provider", provider=result["provider"]))
     st.caption(t(locale, "ocr.status", status=result.get("status", "")))
+    st.caption(t(locale, "ocr.cost_mode", mode=t(locale, f"ocr.cost_mode.{result.get('cost_mode', 'free')}")))
     st.caption(t(locale, "ocr.preprocessing_result", mode=t(locale, f"ocr.preprocessing.{result.get('preprocessing_mode', 'original')}")))
     st.markdown(t(locale, "ocr.raw_text"))
     st.text_area(t(locale, "ocr.raw_text"), value=result["raw_text"], height=160, disabled=True, label_visibility="collapsed")

@@ -93,6 +93,7 @@ def test_mock_provider_explicitly_returns_mock_result():
     assert result.provider == "mock"
     assert result.status == "success"
     assert result.is_mock is True
+    assert result.cost_mode == "test"
     assert "Demo Customer" in result.text
 
 
@@ -115,7 +116,37 @@ def test_auto_provider_does_not_return_mock_by_default(monkeypatch):
     assert result.provider == "tesseract"
     assert result.status == "success"
     assert result.is_mock is False
+    assert result.cost_mode == "free"
     assert "Demo Customer" not in result.text
+
+
+def test_auto_provider_with_gemini_key_still_uses_tesseract(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-key")
+    monkeypatch.delenv("OCR_PROVIDER", raising=False)
+    called = {"tesseract": False, "gemini": False}
+
+    def fake_tesseract(path, preprocessing_mode="original"):
+        called["tesseract"] = True
+        return {
+            "ocr_status": "SUCCESS",
+            "extracted_text": "Name: Free OCR Customer",
+            "warning": "",
+            "ocr_message": "OCR extraction successful",
+            "preprocessing_mode": preprocessing_mode,
+        }
+
+    def fake_gemini(file_bytes, mime_type, api_key):
+        called["gemini"] = True
+        return "Name: Gemini Customer"
+
+    monkeypatch.setattr(ocr_service, "_extract_text_with_core_ocr", fake_tesseract)
+    monkeypatch.setattr(ocr_service, "_call_gemini_vision_ocr", fake_gemini)
+
+    result = extract_text_from_upload(b"fake-image", "upload.png", provider="auto")
+
+    assert result.provider == "tesseract"
+    assert result.text == "Name: Free OCR Customer"
+    assert called == {"tesseract": True, "gemini": False}
 
 
 def test_upload_flow_passes_preprocessing_mode(monkeypatch):
@@ -156,6 +187,63 @@ def test_mock_mode_not_affected_by_preprocessing_mode():
     assert result.provider == "mock"
     assert result.preprocessing_mode == "original"
     assert "Demo Customer" in result.text
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_mime"),
+    [
+        ("sample.jpg", "image/jpeg"),
+        ("sample.png", "image/png"),
+        ("sample.pdf", "application/pdf"),
+    ],
+)
+def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, filename, expected_mime):
+    captured = {}
+
+    def fake_call(file_bytes, mime_type, api_key):
+        captured["file_bytes"] = file_bytes
+        captured["mime_type"] = mime_type
+        captured["api_key"] = api_key
+        return "Name: Gemini OCR Customer\nPhone: 91234567"
+
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-gemini-key")
+    monkeypatch.setattr(ocr_service, "_call_gemini_vision_ocr", fake_call)
+
+    result = extract_text_from_upload(b"fake-content", filename, provider="gemini", preprocessing_mode="high_contrast")
+
+    assert result.provider == "gemini"
+    assert result.status == "success"
+    assert result.cost_mode == "paid"
+    assert result.preprocessing_mode == "original"
+    assert result.text.startswith("Name: Gemini OCR Customer")
+    assert captured == {
+        "file_bytes": b"fake-content",
+        "mime_type": expected_mime,
+        "api_key": "fake-gemini-key",
+    }
+
+
+def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch):
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "")
+
+    result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
+
+    assert result.provider == "gemini"
+    assert result.status == "unavailable"
+    assert result.cost_mode == "paid"
+    assert "GEMINI_API_KEY" in (result.error or "")
+    assert "Demo Customer" not in result.text
+
+
+def test_gemini_provider_unsupported_file_type_does_not_fallback(monkeypatch):
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
+
+    result = extract_text_from_upload(b"fake-content", "sample.webp", provider="gemini")
+
+    assert result.provider == "gemini"
+    assert result.status == "unsupported"
+    assert result.cost_mode == "paid"
+    assert "Demo Customer" not in result.text
 
 
 @pytest.mark.parametrize("filename", ["customers.csv", "customers.xlsx"])
@@ -262,6 +350,7 @@ def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypat
 
     assert result.provider == "tesseract"
     assert result.provider != "gemini-placeholder"
+    assert result.cost_mode == "free"
     assert "Demo Customer" not in result.text
 
 
@@ -325,6 +414,8 @@ def test_ocr_i18n_keys_match_between_locales():
     assert "ocr.title" in ocr_keys
     assert "ocr.confirm_save" in ocr_keys
     assert "ocr.status" in ocr_keys
+    assert "ocr.mode" in ocr_keys
+    assert "ocr.cost_mode" in ocr_keys
     assert "ocr.preprocessing_mode" in ocr_keys
 
 

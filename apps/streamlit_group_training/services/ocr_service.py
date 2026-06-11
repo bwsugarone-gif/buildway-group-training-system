@@ -12,9 +12,11 @@ from typing import Any
 
 
 SUPPORTED_OCR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"}
+SUPPORTED_GEMINI_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
 UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
 OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
 OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
+GEMINI_OCR_UNAVAILABLE_ERROR = "Gemini OCR 未啟用，請確認 GEMINI_API_KEY 已設定。"
 
 
 @dataclass
@@ -25,6 +27,7 @@ class OCRUploadResult:
     error: str | None = None
     is_mock: bool = False
     preprocessing_mode: str = "original"
+    cost_mode: str = "free"
 
 
 CUSTOMER_FIELDS = {
@@ -129,6 +132,7 @@ def extract_text_from_upload(
             text="",
             error="empty_upload",
             preprocessing_mode=normalized_preprocessing,
+            cost_mode=_cost_mode_for_provider(requested_provider),
         )
     if suffix in UNSUPPORTED_UPLOAD_EXTENSIONS or suffix not in SUPPORTED_OCR_EXTENSIONS:
         return OCRUploadResult(
@@ -137,15 +141,28 @@ def extract_text_from_upload(
             text="",
             error=f"Unsupported file type: {suffix or 'unknown'}",
             preprocessing_mode=normalized_preprocessing,
+            cost_mode=_cost_mode_for_provider(requested_provider),
         )
-    if requested_provider not in {"auto", "tesseract"}:
+    if requested_provider not in {"auto", "tesseract", "gemini"}:
         return OCRUploadResult(
             provider="unsupported",
             status="unsupported",
             text="",
             error=f"Unsupported OCR provider: {requested_provider}",
             preprocessing_mode=normalized_preprocessing,
+            cost_mode=_cost_mode_for_provider(requested_provider),
         )
+    if requested_provider == "gemini":
+        if suffix not in SUPPORTED_GEMINI_EXTENSIONS:
+            return OCRUploadResult(
+                provider="gemini",
+                status="unsupported",
+                text="",
+                error=f"Gemini OCR does not support file type: {suffix or 'unknown'}",
+                preprocessing_mode="original",
+                cost_mode="paid",
+            )
+        return _extract_with_gemini(file_bytes, suffix)
 
     return _extract_with_tesseract(file_bytes, suffix, normalized_preprocessing)
 
@@ -159,6 +176,7 @@ def extract_text_from_image(image_bytes: bytes) -> dict[str, Any]:
         "error": result.error,
         "provider": result.provider,
         "status": result.status,
+        "cost_mode": result.cost_mode,
     }
 
 
@@ -175,6 +193,8 @@ def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
         return "mock"
     if normalized_provider == "tesseract":
         return "tesseract"
+    if normalized_provider == "gemini":
+        return "gemini"
     if normalized_provider == "unsupported" or normalized_status == "unsupported":
         return "unsupported"
     if normalized_provider == "unavailable" or normalized_status == "unavailable":
@@ -185,6 +205,15 @@ def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
 def _normalize_preprocessing_mode(mode: str) -> str:
     normalized = (mode or "original").strip().lower()
     return normalized if normalized in OCR_PREPROCESSING_MODES else "original"
+
+
+def _cost_mode_for_provider(provider: str) -> str:
+    normalized = (provider or "auto").strip().lower()
+    if normalized == "gemini":
+        return "paid"
+    if normalized == "mock":
+        return "test"
+    return "free"
 
 
 def _extract_with_tesseract(file_bytes: bytes, suffix: str, preprocessing_mode: str) -> OCRUploadResult:
@@ -270,6 +299,91 @@ def _extract_text_with_core_ocr(file_path: Path, preprocessing_mode: str = "orig
         }
 
 
+def _extract_with_gemini(file_bytes: bytes, suffix: str) -> OCRUploadResult:
+    api_key = _get_gemini_api_key()
+    if not api_key:
+        return OCRUploadResult(
+            provider="gemini",
+            status="unavailable",
+            text="",
+            error=GEMINI_OCR_UNAVAILABLE_ERROR,
+            preprocessing_mode="original",
+            cost_mode="paid",
+        )
+    try:
+        text = _call_gemini_vision_ocr(file_bytes, _mime_type_for_suffix(suffix), api_key)
+    except Exception as exc:
+        return OCRUploadResult(
+            provider="gemini",
+            status="failed",
+            text="",
+            error=str(exc),
+            preprocessing_mode="original",
+            cost_mode="paid",
+        )
+    return OCRUploadResult(
+        provider="gemini",
+        status="success" if text.strip() else "empty",
+        text=text.strip(),
+        error=None if text.strip() else "Gemini OCR returned empty text.",
+        preprocessing_mode="original",
+        cost_mode="paid",
+    )
+
+
+def _get_gemini_api_key() -> str:
+    try:
+        import streamlit as st
+
+        secret = st.secrets.get("GEMINI_API_KEY", "")
+        if secret:
+            return str(secret)
+    except Exception:
+        pass
+    return os.getenv("GEMINI_API_KEY", "")
+
+
+def _mime_type_for_suffix(suffix: str) -> str:
+    return {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".pdf": "application/pdf",
+    }.get(suffix.lower(), "application/octet-stream")
+
+
+def _build_gemini_file_part(types: Any, file_bytes: bytes, mime_type: str) -> Any:
+    if hasattr(types.Part, "from_bytes"):
+        return types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+    return types.Part(inline_data=types.Blob(mime_type=mime_type, data=file_bytes))
+
+
+def _call_gemini_vision_ocr(file_bytes: bytes, mime_type: str, api_key: str) -> str:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    model = os.getenv("GEMINI_OCR_MODEL", "gemini-2.0-flash")
+    prompt = (
+        "Extract all readable text from this Hong Kong insurance/customer document. "
+        "Preserve line breaks and labels. Return plain text only. "
+        "Do not summarize and do not invent missing fields."
+    )
+    response = client.models.generate_content(
+        model=model,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(text=prompt),
+                    _build_gemini_file_part(types, file_bytes, mime_type),
+                ],
+            )
+        ],
+    )
+    return str(getattr(response, "text", "") or "")
+
+
 def _mock_ocr_result() -> OCRUploadResult:
     return OCRUploadResult(
         provider="mock",
@@ -292,6 +406,7 @@ def _mock_ocr_result() -> OCRUploadResult:
         ).format(today=date.today().isoformat()),
         error=None,
         is_mock=True,
+        cost_mode="test",
     )
 
 
