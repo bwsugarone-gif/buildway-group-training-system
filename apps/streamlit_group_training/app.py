@@ -1986,6 +1986,9 @@ def ocr_capture_page(user, locale: str) -> None:
             file_bytes,
             uploaded_file.name,
             preprocessing_mode=selected_preprocessing_mode,
+            actor_id=user.id,
+            tenant_id=user.tenant_id,
+            paid_ocr_allowed_by_role=user.role == UserRole.ADMIN,
         )
         if extraction.status in {"failed", "unavailable"}:
             st.error(t(locale, "ocr.extract_failed", error=extraction.error or ""))

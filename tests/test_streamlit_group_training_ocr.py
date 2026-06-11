@@ -228,9 +228,10 @@ def test_mock_mode_not_affected_by_preprocessing_mode():
         ("sample.pdf", "application/pdf"),
     ],
 )
-def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, filename, expected_mime):
+def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, tmp_path, filename, expected_mime):
     captured = {}
     monkeypatch.setenv("ENABLE_PAID_OCR", "true")
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(tmp_path / "ocr_usage.jsonl"))
 
     def fake_call(file_bytes, mime_type, api_key):
         captured["file_bytes"] = file_bytes
@@ -255,8 +256,9 @@ def test_gemini_provider_explicitly_runs_vision_ocr(monkeypatch, filename, expec
     }
 
 
-def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch):
+def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch, tmp_path):
     monkeypatch.setenv("ENABLE_PAID_OCR", "true")
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(tmp_path / "ocr_usage.jsonl"))
     monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "")
 
     result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
@@ -268,8 +270,9 @@ def test_gemini_provider_missing_api_key_returns_unavailable(monkeypatch):
     assert "Demo Customer" not in result.text
 
 
-def test_gemini_provider_disabled_when_paid_ocr_not_enabled(monkeypatch):
+def test_gemini_provider_disabled_when_paid_ocr_not_enabled(monkeypatch, tmp_path):
     monkeypatch.delenv("ENABLE_PAID_OCR", raising=False)
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(tmp_path / "ocr_usage.jsonl"))
     monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
 
     result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
@@ -281,8 +284,80 @@ def test_gemini_provider_disabled_when_paid_ocr_not_enabled(monkeypatch):
     assert "Demo Customer" not in result.text
 
 
-def test_gemini_provider_unsupported_file_type_does_not_fallback(monkeypatch):
+def test_gemini_provider_allowed_for_admin_role_when_env_disabled(monkeypatch, tmp_path):
+    captured = {"called": False}
+    monkeypatch.delenv("ENABLE_PAID_OCR", raising=False)
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(tmp_path / "ocr_usage.jsonl"))
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
+
+    def fake_call(file_bytes, mime_type, api_key):
+        captured["called"] = True
+        return "Name: Admin Gemini Customer"
+
+    monkeypatch.setattr(ocr_service, "_call_gemini_vision_ocr", fake_call)
+
+    result = extract_text_from_upload(
+        b"fake-content",
+        "sample.png",
+        provider="gemini",
+        actor_id="admin_001",
+        tenant_id="tenant_buildway_demo",
+        paid_ocr_allowed_by_role=True,
+    )
+
+    assert result.provider == "gemini"
+    assert result.status == "success"
+    assert captured["called"] is True
+
+
+def test_gemini_provider_daily_quota_blocks_api_call(monkeypatch, tmp_path):
+    usage_log = tmp_path / "ocr_usage.jsonl"
     monkeypatch.setenv("ENABLE_PAID_OCR", "true")
+    monkeypatch.setenv("MAX_PAID_OCR_PER_DAY", "1")
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(usage_log))
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
+    today = ocr_service.date.today().isoformat()
+    usage_log.write_text(
+        json.dumps({"date": today, "provider": "gemini", "counted": True}) + "\n",
+        encoding="utf-8",
+    )
+
+    def fake_call(file_bytes, mime_type, api_key):
+        raise AssertionError("Gemini API should not be called after quota is exhausted")
+
+    monkeypatch.setattr(ocr_service, "_call_gemini_vision_ocr", fake_call)
+
+    result = extract_text_from_upload(b"fake-content", "sample.png", provider="gemini")
+
+    assert result.provider == "gemini"
+    assert result.status == "unavailable"
+    assert result.error == "今日高準確識別額度已用完，請稍後再試或聯絡管理員"
+
+
+def test_gemini_provider_logs_paid_usage(monkeypatch, tmp_path):
+    usage_log = tmp_path / "ocr_usage.jsonl"
+    monkeypatch.setenv("ENABLE_PAID_OCR", "true")
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(usage_log))
+    monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
+    monkeypatch.setattr(ocr_service, "_call_gemini_vision_ocr", lambda file_bytes, mime_type, api_key: "Name: Logged Customer")
+
+    result = extract_text_from_upload(
+        b"fake-content",
+        "sample.png",
+        provider="gemini",
+        actor_id="agt_001",
+        tenant_id="tenant_buildway_demo",
+    )
+    events = [json.loads(line) for line in usage_log.read_text(encoding="utf-8").splitlines()]
+
+    assert result.status == "success"
+    assert any(event["event"] == "api_call" and event["counted"] is True for event in events)
+    assert any(event["event"] == "success" and event["actor_id"] == "agt_001" for event in events)
+
+
+def test_gemini_provider_unsupported_file_type_does_not_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("ENABLE_PAID_OCR", "true")
+    monkeypatch.setenv("OCR_USAGE_LOG_PATH", str(tmp_path / "ocr_usage.jsonl"))
     monkeypatch.setattr(ocr_service, "_get_gemini_api_key", lambda: "fake-key")
 
     result = extract_text_from_upload(b"fake-content", "sample.webp", provider="gemini")

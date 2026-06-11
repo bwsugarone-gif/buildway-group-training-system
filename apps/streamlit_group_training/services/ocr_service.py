@@ -7,7 +7,7 @@ import re
 import tempfile
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,8 @@ OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
 OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
 GEMINI_OCR_UNAVAILABLE_ERROR = "Gemini OCR 未啟用，請確認 GEMINI_API_KEY 已設定。"
 PAID_OCR_DISABLED_ERROR = "Paid OCR is disabled. Set ENABLE_PAID_OCR=true to use Gemini OCR."
+PAID_OCR_QUOTA_EXCEEDED_ERROR = "今日高準確識別額度已用完，請稍後再試或聯絡管理員"
+DEFAULT_MAX_PAID_OCR_PER_DAY = 20
 
 
 @dataclass
@@ -116,6 +118,9 @@ def extract_text_from_upload(
     filename: str,
     provider: str | None = None,
     preprocessing_mode: str = "original",
+    actor_id: str | None = None,
+    tenant_id: str | None = None,
+    paid_ocr_allowed_by_role: bool = False,
 ) -> OCRUploadResult:
     """Extract OCR text from uploaded bytes using the configured provider."""
     requested_provider = _resolve_ocr_provider(provider)
@@ -153,7 +158,8 @@ def extract_text_from_upload(
             cost_mode=_cost_mode_for_provider(requested_provider),
         )
     if requested_provider == "gemini":
-        if not _is_paid_ocr_enabled():
+        if not _paid_ocr_access_allowed(paid_ocr_allowed_by_role):
+            _log_paid_ocr_event("blocked_disabled", actor_id, tenant_id, filename, requested_provider)
             return OCRUploadResult(
                 provider="gemini",
                 status="unavailable",
@@ -163,6 +169,7 @@ def extract_text_from_upload(
                 cost_mode="paid",
             )
         if suffix not in SUPPORTED_GEMINI_EXTENSIONS:
+            _log_paid_ocr_event("blocked_unsupported", actor_id, tenant_id, filename, requested_provider)
             return OCRUploadResult(
                 provider="gemini",
                 status="unsupported",
@@ -171,7 +178,17 @@ def extract_text_from_upload(
                 preprocessing_mode="original",
                 cost_mode="paid",
             )
-        return _extract_with_gemini(file_bytes, suffix)
+        if not _paid_ocr_quota_available():
+            _log_paid_ocr_event("blocked_quota", actor_id, tenant_id, filename, requested_provider)
+            return OCRUploadResult(
+                provider="gemini",
+                status="unavailable",
+                text="",
+                error=PAID_OCR_QUOTA_EXCEEDED_ERROR,
+                preprocessing_mode="original",
+                cost_mode="paid",
+            )
+        return _extract_with_gemini(file_bytes, suffix, actor_id=actor_id, tenant_id=tenant_id, filename=filename)
 
     return _extract_with_tesseract(file_bytes, suffix, normalized_preprocessing)
 
@@ -233,6 +250,81 @@ def _env_truthy(name: str, default: bool = False) -> bool:
 
 def _is_paid_ocr_enabled() -> bool:
     return _env_truthy("ENABLE_PAID_OCR", default=False)
+
+
+def _paid_ocr_access_allowed(allowed_by_role: bool = False) -> bool:
+    return bool(allowed_by_role) or _is_paid_ocr_enabled()
+
+
+def _max_paid_ocr_per_day() -> int:
+    value = os.environ.get("MAX_PAID_OCR_PER_DAY")
+    if not value:
+        return DEFAULT_MAX_PAID_OCR_PER_DAY
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return DEFAULT_MAX_PAID_OCR_PER_DAY
+
+
+def _paid_ocr_quota_available(day: str | None = None) -> bool:
+    return _paid_ocr_usage_count(day or date.today().isoformat()) < _max_paid_ocr_per_day()
+
+
+def _paid_ocr_usage_count(day: str) -> int:
+    path = _ocr_usage_log_path()
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("date") == day and event.get("provider") == "gemini" and event.get("counted") is True:
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def _ocr_usage_log_path() -> Path:
+    configured = os.environ.get("OCR_USAGE_LOG_PATH")
+    return Path(configured) if configured else Path("logs") / "ocr_usage.jsonl"
+
+
+def _log_paid_ocr_event(
+    event_type: str,
+    actor_id: str | None,
+    tenant_id: str | None,
+    filename: str | None,
+    provider: str,
+    *,
+    counted: bool = False,
+    status: str | None = None,
+    error: str | None = None,
+) -> None:
+    path = _ocr_usage_log_path()
+    record = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "date": date.today().isoformat(),
+        "event": event_type,
+        "provider": provider,
+        "cost_mode": "paid",
+        "counted": counted,
+        "status": status or "",
+        "error": error or "",
+        "actor_id": actor_id or "",
+        "tenant_id": tenant_id or "",
+        "filename": filename or "",
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
 
 
 def _cost_mode_for_provider(provider: str) -> str:
@@ -327,9 +419,17 @@ def _extract_text_with_core_ocr(file_path: Path, preprocessing_mode: str = "orig
         }
 
 
-def _extract_with_gemini(file_bytes: bytes, suffix: str) -> OCRUploadResult:
+def _extract_with_gemini(
+    file_bytes: bytes,
+    suffix: str,
+    *,
+    actor_id: str | None = None,
+    tenant_id: str | None = None,
+    filename: str | None = None,
+) -> OCRUploadResult:
     api_key = _get_gemini_api_key()
     if not api_key:
+        _log_paid_ocr_event("blocked_unavailable", actor_id, tenant_id, filename, "gemini", error=GEMINI_OCR_UNAVAILABLE_ERROR)
         return OCRUploadResult(
             provider="gemini",
             status="unavailable",
@@ -338,9 +438,11 @@ def _extract_with_gemini(file_bytes: bytes, suffix: str) -> OCRUploadResult:
             preprocessing_mode="original",
             cost_mode="paid",
         )
+    _log_paid_ocr_event("api_call", actor_id, tenant_id, filename, "gemini", counted=True)
     try:
         text = _call_gemini_vision_ocr(file_bytes, _mime_type_for_suffix(suffix), api_key)
     except Exception as exc:
+        _log_paid_ocr_event("failed", actor_id, tenant_id, filename, "gemini", status="failed", error=str(exc))
         return OCRUploadResult(
             provider="gemini",
             status="failed",
@@ -349,9 +451,11 @@ def _extract_with_gemini(file_bytes: bytes, suffix: str) -> OCRUploadResult:
             preprocessing_mode="original",
             cost_mode="paid",
         )
+    status = "success" if text.strip() else "empty"
+    _log_paid_ocr_event(status, actor_id, tenant_id, filename, "gemini", status=status)
     return OCRUploadResult(
         provider="gemini",
-        status="success" if text.strip() else "empty",
+        status=status,
         text=text.strip(),
         error=None if text.strip() else "Gemini OCR returned empty text.",
         preprocessing_mode="original",
