@@ -494,6 +494,11 @@ def _call_gemini_vision_ocr(file_bytes: bytes, mime_type: str, api_key: str) -> 
     from google import genai
     from google.genai import types
 
+    print("========== USING GEMINI OCR ==========")
+    print(f"GEMINI KEY FOUND = {bool(api_key)}")
+    print(f"FILE SIZE = {len(file_bytes)} bytes")
+    print(f"MIME TYPE = {mime_type}")
+    
     client = genai.Client(api_key=api_key)
     model = os.getenv("GEMINI_OCR_MODEL", "gemini-2.0-flash")
     prompt = (
