@@ -16,7 +16,7 @@ from PIL import Image, ImageEnhance, ImageFilter
 
 
 MAX_OCR_PDF_PAGES = 20
-OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
+OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast", "auto_enhanced"}
 OCR_UNAVAILABLE_MESSAGE = "OCR is unavailable. Please provide a text-selectable PDF."
 OCR_FAILED_MESSAGE = "OCR extraction failed. Please provide a clearer document."
 OCR_SUCCESS_MESSAGE = "OCR extraction successful"

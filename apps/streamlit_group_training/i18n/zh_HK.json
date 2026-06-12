@@ -143,6 +143,7 @@
   "ocr.preprocessing.original": "原圖識別",
   "ocr.preprocessing.enhanced": "增強識別",
   "ocr.preprocessing.high_contrast": "高對比識別",
+  "ocr.preprocessing.auto_enhanced": "自動增強",
   "ocr.field_confidence": "識別信心：{level}",
   "ocr.confidence.high": "高",
   "ocr.confidence.medium": "中",

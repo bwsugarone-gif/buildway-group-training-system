@@ -117,7 +117,7 @@ def extract_text_from_upload(
     file_bytes: bytes,
     filename: str,
     provider: str | None = None,
-    preprocessing_mode: str = "original",
+    preprocessing_mode: str = "auto_enhanced",
     actor_id: str | None = None,
     tenant_id: str | None = None,
     paid_ocr_allowed_by_role: bool = False,
