@@ -34,4 +34,4 @@ address              ✗            0.00
 ```
 
 ### Gemini: UNAVAILABLE
-Error: cannot import name 'exceptions' from 'cryptography.hazmat.bindings._rust' (unknown location)
+Error: 404 NOT_FOUND. {'error': {'code': 404, 'message': 'This model models/gemini-2.0-flash is no longer available. Please update your code to use a newer model for the latest features and improvements.', 'status': 'NOT_FOUND'}}
