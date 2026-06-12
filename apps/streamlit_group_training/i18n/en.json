@@ -143,6 +143,7 @@
   "ocr.preprocessing.original": "Original recognition",
   "ocr.preprocessing.enhanced": "Enhanced recognition",
   "ocr.preprocessing.high_contrast": "High contrast recognition",
+  "ocr.preprocessing.auto_enhanced": "Auto enhanced",
   "ocr.field_confidence": "Recognition confidence: {level}",
   "ocr.confidence.high": "high",
   "ocr.confidence.medium": "medium",

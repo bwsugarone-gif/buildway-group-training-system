@@ -519,7 +519,7 @@ def test_tesseract_adapter_can_be_mocked_without_real_tesseract(monkeypatch):
     assert result.status == "success"
     assert result.text == "Name: OCR Customer"
     assert captured["path"].exists() is False
-    assert captured["preprocessing_mode"] == "original"
+    assert captured["preprocessing_mode"] == "auto_enhanced"
 
 
 def test_gemini_api_key_does_not_change_provider_to_gemini_placeholder(monkeypatch):
