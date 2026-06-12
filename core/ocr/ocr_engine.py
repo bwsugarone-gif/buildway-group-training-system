@@ -108,6 +108,42 @@ def _ocr_image(image_or_path: Image.Image | str | Path, lang: str = "chi_tra+eng
     return pytesseract.image_to_string(prepared, lang=lang)
 
 
+def _ocr_image_with_best_result(image: Image.Image, lang: str = "chi_tra+eng") -> tuple[str, str]:
+    """
+    Run OCR with multiple preprocessing variants and select best result.
+    
+    Returns:
+        Tuple of (best_text, best_variant_name)
+    """
+    from core.ocr.image_preprocessing import preprocess_image_variants
+    from core.ocr.result_selector import select_best_ocr_result
+    
+    import pytesseract
+    
+    # Generate preprocessed variants
+    variants = preprocess_image_variants(image)
+    
+    # Run OCR on each variant
+    results = {}
+    for variant_name, variant_image in variants.items():
+        try:
+            text = pytesseract.image_to_string(variant_image, lang=lang)
+            results[variant_name] = {
+                "extracted_text": _normalise_text(text),
+                "ocr_status": "SUCCESS" if text.strip() else "EMPTY",
+            }
+        except Exception as e:
+            results[variant_name] = {
+                "extracted_text": "",
+                "ocr_status": "FAILED",
+                "warning": str(e),
+            }
+    
+    # Select best result
+    best_variant, best_result = select_best_ocr_result(results)
+    return best_result.get("extracted_text", ""), best_variant
+
+
 def extract_text_with_ocr(file_path: str | Path, lang: str = "chi_tra+eng", preprocessing_mode: str = "original") -> dict[str, Any]:
     """
     Main entry point. Extracts text from PDF or image file.
@@ -131,12 +167,25 @@ def extract_text_with_ocr(file_path: str | Path, lang: str = "chi_tra+eng", prep
             return result
         try:
             img = Image.open(file_path)
-            text = _normalise_text(_ocr_image(img, lang=lang, preprocessing_mode=normalized_preprocessing))
-            result["extracted_text"] = text
-            result["ocr_used"] = True
-            result["ocr_page_count"] = 1
-            result["ocr_status"] = "SUCCESS" if text else "EMPTY"
-            result["ocr_message"] = OCR_SUCCESS_MESSAGE if text else OCR_FAILED_MESSAGE
+            
+            # Use best-result selection for auto-enhanced mode
+            if normalized_preprocessing == "auto_enhanced":
+                text, best_variant = _ocr_image_with_best_result(img, lang=lang)
+                result["extracted_text"] = text
+                result["ocr_used"] = True
+                result["ocr_page_count"] = 1
+                result["ocr_status"] = "SUCCESS" if text else "EMPTY"
+                result["ocr_message"] = OCR_SUCCESS_MESSAGE if text else OCR_FAILED_MESSAGE
+                result["preprocessing_mode"] = "auto_enhanced"
+                result["best_variant"] = best_variant
+            else:
+                # Original single-variant mode
+                text = _normalise_text(_ocr_image(img, lang=lang, preprocessing_mode=normalized_preprocessing))
+                result["extracted_text"] = text
+                result["ocr_used"] = True
+                result["ocr_page_count"] = 1
+                result["ocr_status"] = "SUCCESS" if text else "EMPTY"
+                result["ocr_message"] = OCR_SUCCESS_MESSAGE if text else OCR_FAILED_MESSAGE
         except Exception as e:
             result["ocr_status"] = "FAILED"
             result["ocr_message"] = OCR_FAILED_MESSAGE

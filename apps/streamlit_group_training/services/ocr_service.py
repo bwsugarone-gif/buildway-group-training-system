@@ -15,7 +15,7 @@ from typing import Any
 SUPPORTED_OCR_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp", ".pdf"}
 SUPPORTED_GEMINI_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
 UNSUPPORTED_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
-OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast"}
+OCR_PREPROCESSING_MODES = {"original", "enhanced", "high_contrast", "auto_enhanced"}
 OCR_UNAVAILABLE_ERROR = "OCR 引擎未啟用，請確認 Tesseract 已安裝，或切換至 mock 測試模式。"
 GEMINI_OCR_UNAVAILABLE_ERROR = "Gemini OCR 未啟用，請確認 GEMINI_API_KEY 已設定。"
 PAID_OCR_DISABLED_ERROR = "Paid OCR is disabled. Set ENABLE_PAID_OCR=true to use Gemini OCR."
@@ -229,8 +229,8 @@ def get_ocr_provider_label(provider: str, status: str | None = None) -> str:
 
 
 def _normalize_preprocessing_mode(mode: str) -> str:
-    normalized = (mode or "original").strip().lower()
-    return normalized if normalized in OCR_PREPROCESSING_MODES else "original"
+    normalized = (mode or "auto_enhanced").strip().lower()
+    return normalized if normalized in OCR_PREPROCESSING_MODES else "auto_enhanced"
 
 
 def _resolve_ocr_provider(provider: str | None = None) -> str:
