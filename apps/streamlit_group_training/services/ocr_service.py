@@ -500,7 +500,7 @@ def _call_gemini_vision_ocr(file_bytes: bytes, mime_type: str, api_key: str) -> 
     print(f"MIME TYPE = {mime_type}")
     
     client = genai.Client(api_key=api_key)
-    model = os.getenv("GEMINI_OCR_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GEMINI_OCR_MODEL", "gemini-2.5-flash")
     prompt = (
         "Extract all readable text from this Hong Kong insurance/customer document. "
         "Preserve line breaks and labels. Return plain text only. "
