@@ -256,13 +256,14 @@ def compare_providers(
 
 
 def format_benchmark_report(
-    tesseract_result: BenchmarkResult,
-    gemini_result: BenchmarkResult,
-    comparison: dict[str, Any],
+    tesseract_result: BenchmarkResult | None,
+    gemini_result: BenchmarkResult | None,
+    comparison: dict[str, Any] | None,
     document_name: str = "Test Document",
 ) -> str:
     """
     Format a human-readable benchmark report.
+    Supports partial results when one provider is unavailable.
     
     Returns:
         Formatted report string
@@ -276,34 +277,72 @@ def format_benchmark_report(
     # Overall accuracy
     lines.append("## OVERALL ACCURACY")
     lines.append("")
-    lines.append(f"Tesseract: {tesseract_result.correct_fields}/{tesseract_result.total_fields} "
-                 f"({tesseract_result.accuracy_percentage:.1f}%)")
-    lines.append(f"Gemini:    {gemini_result.correct_fields}/{gemini_result.total_fields} "
-                 f"({gemini_result.accuracy_percentage:.1f}%)")
-    lines.append("")
     
-    winner = comparison["winner"]
-    improvement = comparison["accuracy_improvement"]
-    if winner == "tie":
-        lines.append("Result: TIE")
+    if tesseract_result:
+        lines.append(f"Tesseract: {tesseract_result.correct_fields}/{tesseract_result.total_fields} "
+                     f"({tesseract_result.accuracy_percentage:.1f}%)")
     else:
-        lines.append(f"Winner: {winner.upper()} (+{improvement:.1f}% accuracy)")
+        lines.append("Tesseract: UNAVAILABLE")
+    
+    if gemini_result:
+        lines.append(f"Gemini:    {gemini_result.correct_fields}/{gemini_result.total_fields} "
+                     f"({gemini_result.accuracy_percentage:.1f}%)")
+    else:
+        lines.append("Gemini:    UNAVAILABLE")
+    
     lines.append("")
     
-    # Field-by-field comparison
-    lines.append("## FIELD-BY-FIELD COMPARISON")
-    lines.append("")
-    lines.append(f"{'Field':<20} {'Tesseract':<12} {'Gemini':<12} {'Better':<10}")
-    lines.append("-" * 80)
+    # Winner determination (only if comparison available)
+    if comparison:
+        winner = comparison["winner"]
+        improvement = comparison["accuracy_improvement"]
+        if winner == "tie":
+            lines.append("Result: TIE")
+        else:
+            lines.append(f"Winner: {winner.upper()} (+{improvement:.1f}% accuracy)")
+    elif tesseract_result and not gemini_result:
+        lines.append("Result: Only Tesseract available")
+    elif gemini_result and not tesseract_result:
+        lines.append("Result: Only Gemini available")
     
-    for field_name, data in comparison["field_by_field"].items():
-        tess_status = "✓" if data["tesseract_correct"] else f"✗ ({data['tesseract_similarity']:.2f})"
-        gemini_status = "✓" if data["gemini_correct"] else f"✗ ({data['gemini_similarity']:.2f})"
-        better = data["better_provider"]
+    lines.append("")
+    
+    # Field-by-field comparison (only if both results available)
+    if comparison and comparison.get("field_by_field"):
+        lines.append("## FIELD-BY-FIELD COMPARISON")
+        lines.append("")
+        lines.append(f"{'Field':<20} {'Tesseract':<12} {'Gemini':<12} {'Better':<10}")
+        lines.append("-" * 80)
         
-        lines.append(f"{field_name:<20} {tess_status:<12} {gemini_status:<12} {better:<10}")
+        for field_name, data in comparison["field_by_field"].items():
+            tess_status = "✓" if data["tesseract_correct"] else f"✗ ({data['tesseract_similarity']:.2f})"
+            gemini_status = "✓" if data["gemini_correct"] else f"✗ ({data['gemini_similarity']:.2f})"
+            better = data["better_provider"]
+            
+            lines.append(f"{field_name:<20} {tess_status:<12} {gemini_status:<12} {better:<10}")
+        
+        lines.append("")
+    elif tesseract_result:
+        # Show Tesseract-only results
+        lines.append("## TESSERACT FIELD VALIDATION")
+        lines.append("")
+        lines.append(f"{'Field':<20} {'Status':<12} {'Similarity':<15}")
+        lines.append("-" * 80)
+        for val in tesseract_result.validations:
+            status = "✓" if val.is_correct else "✗"
+            lines.append(f"{val.field_name:<20} {status:<12} {val.similarity_score:.2f}")
+        lines.append("")
+    elif gemini_result:
+        # Show Gemini-only results
+        lines.append("## GEMINI FIELD VALIDATION")
+        lines.append("")
+        lines.append(f"{'Field':<20} {'Status':<12} {'Similarity':<15}")
+        lines.append("-" * 80)
+        for val in gemini_result.validations:
+            status = "✓" if val.is_correct else "✗"
+            lines.append(f"{val.field_name:<20} {status:<12} {val.similarity_score:.2f}")
+        lines.append("")
     
-    lines.append("")
     lines.append("=" * 80)
     
     return "\n".join(lines)

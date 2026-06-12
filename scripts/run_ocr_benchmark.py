@@ -153,48 +153,74 @@ def run_benchmark(image_path: str):
     
     # Extract with Tesseract
     print("🔍 Running Tesseract OCR with best-result selection...")
+    tess_raw = ""
+    tess_structured = {}
+    tesseract_available = False
+    tesseract_error = ""
+    
     try:
         tess_raw, tess_structured = extract_with_tesseract(image_path)
         print(f"✓ Tesseract extraction complete ({len(tess_raw)} chars)")
         print(f"  Extracted fields: {list(tess_structured.keys())}")
+        tesseract_available = True
     except Exception as e:
-        print(f"❌ Tesseract failed: {e}")
-        return
+        print(f"⚠️  Tesseract unavailable: {e}")
+        print(f"   Continuing with Gemini Vision only...")
+        tesseract_error = str(e)
     
     print()
     
     # Extract with Gemini
     print("🔍 Running Gemini Vision OCR...")
+    gemini_raw = ""
+    gemini_structured = {}
+    gemini_available = False
+    gemini_error = ""
+    
     try:
         gemini_raw, gemini_structured = extract_with_gemini(image_path)
         print(f"✓ Gemini extraction complete ({len(gemini_raw)} chars)")
         print(f"  Extracted fields: {list(gemini_structured.keys())}")
+        gemini_available = True
     except Exception as e:
-        print(f"❌ Gemini failed: {e}")
+        print(f"⚠️  Gemini unavailable: {e}")
         print(f"   Make sure GEMINI_API_KEY is set in environment")
-        return
+        gemini_error = str(e)
     
     print()
     
+    # Check if at least one provider succeeded
+    if not tesseract_available and not gemini_available:
+        print("❌ ERROR: Both OCR providers failed. Cannot generate benchmark report.")
+        print(f"   Tesseract: {tesseract_error}")
+        print(f"   Gemini: {gemini_error}")
+        return
+    
     # Create benchmark results
-    tesseract_result = create_benchmark_result(
-        provider="tesseract",
-        raw_text=tess_raw,
-        structured_data=tess_structured,
-        ground_truth=ground_truth,
-        threshold=0.8,
-    )
+    tesseract_result = None
+    if tesseract_available:
+        tesseract_result = create_benchmark_result(
+            provider="tesseract",
+            raw_text=tess_raw,
+            structured_data=tess_structured,
+            ground_truth=ground_truth,
+            threshold=0.8,
+        )
     
-    gemini_result = create_benchmark_result(
-        provider="gemini",
-        raw_text=gemini_raw,
-        structured_data=gemini_structured,
-        ground_truth=ground_truth,
-        threshold=0.8,
-    )
+    gemini_result = None
+    if gemini_available:
+        gemini_result = create_benchmark_result(
+            provider="gemini",
+            raw_text=gemini_raw,
+            structured_data=gemini_structured,
+            ground_truth=ground_truth,
+            threshold=0.8,
+        )
     
-    # Compare providers
-    comparison = compare_providers(tesseract_result, gemini_result)
+    # Compare providers (if both available)
+    comparison = None
+    if tesseract_result and gemini_result:
+        comparison = compare_providers(tesseract_result, gemini_result)
     
     # Format and print report
     report = format_benchmark_report(
@@ -207,39 +233,52 @@ def run_benchmark(image_path: str):
     print(report)
     
     # Save report
+    import json
     report_path = project_root / "PHASE_2.8_OCR_BENCHMARK_REPORT.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
         f.write("\n\n")
         f.write("## DETAILED EXTRACTION RESULTS\n\n")
-        f.write("### Tesseract Raw Text (first 500 chars):\n")
-        f.write("```\n")
-        f.write(tess_raw[:500])
-        f.write("\n```\n\n")
-        f.write("### Gemini Raw Text (first 500 chars):\n")
-        f.write("```\n")
-        f.write(gemini_raw[:500])
-        f.write("\n```\n\n")
-        f.write("### Tesseract Structured Data:\n")
-        f.write("```json\n")
-        import json
-        f.write(json.dumps(tess_structured, ensure_ascii=False, indent=2))
-        f.write("\n```\n\n")
-        f.write("### Gemini Structured Data:\n")
-        f.write("```json\n")
-        f.write(json.dumps(gemini_structured, ensure_ascii=False, indent=2))
-        f.write("\n```\n")
+        
+        if tesseract_available:
+            f.write("### Tesseract Raw Text (first 500 chars):\n")
+            f.write("```\n")
+            f.write(tess_raw[:500])
+            f.write("\n```\n\n")
+            f.write("### Tesseract Structured Data:\n")
+            f.write("```json\n")
+            f.write(json.dumps(tess_structured, ensure_ascii=False, indent=2))
+            f.write("\n```\n\n")
+        else:
+            f.write("### Tesseract: UNAVAILABLE\n")
+            f.write(f"Error: {tesseract_error}\n\n")
+        
+        if gemini_available:
+            f.write("### Gemini Raw Text (first 500 chars):\n")
+            f.write("```\n")
+            f.write(gemini_raw[:500])
+            f.write("\n```\n\n")
+            f.write("### Gemini Structured Data:\n")
+            f.write("```json\n")
+            f.write(json.dumps(gemini_structured, ensure_ascii=False, indent=2))
+            f.write("\n```\n")
+        else:
+            f.write("### Gemini: UNAVAILABLE\n")
+            f.write(f"Error: {gemini_error}\n")
     
     print(f"\n✅ Report saved to: {report_path}")
     
     # Determine success
     print("\n" + "=" * 80)
-    if gemini_result.correct_fields >= 4:  # At least 4 out of 5 fields correct
+    if gemini_available and gemini_result.correct_fields >= 4:
         print("✅ SUCCESS: Gemini Vision meets acceptance criteria")
         print(f"   Correctly extracted {gemini_result.correct_fields}/5 critical fields")
-    else:
+    elif gemini_available:
         print("⚠️  Gemini Vision needs improvement")
         print(f"   Only extracted {gemini_result.correct_fields}/5 critical fields correctly")
+    elif tesseract_available:
+        print("⚠️  Only Tesseract available for testing")
+        print(f"   Tesseract extracted {tesseract_result.correct_fields}/5 critical fields correctly")
     
     print("=" * 80)
 
