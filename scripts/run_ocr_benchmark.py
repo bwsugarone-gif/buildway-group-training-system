@@ -11,8 +11,12 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv(PROJECT_ROOT / ".env")
 
 from PIL import Image
 from core.ocr.benchmark import create_benchmark_result, compare_providers, format_benchmark_report
@@ -135,6 +139,13 @@ def run_benchmark(image_path: str):
     print("Phase 2.8: OCR Provider Benchmark")
     print("=" * 80)
     print(f"\nTest Image: {image_path.name}")
+    
+    # Check environment variables
+    gemini_key_present = bool(os.getenv("GEMINI_API_KEY"))
+    deepseek_key_present = bool(os.getenv("DEEPSEEK_API_KEY"))
+    print(f"\nEnvironment Check:")
+    print(f"  Gemini Key Found: {gemini_key_present}")
+    print(f"  DeepSeek Key Found: {deepseek_key_present}")
     print()
     
     # Ground truth for validation
@@ -172,20 +183,27 @@ def run_benchmark(image_path: str):
     
     # Extract with Gemini
     print("🔍 Running Gemini Vision OCR...")
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    
     gemini_raw = ""
     gemini_structured = {}
     gemini_available = False
     gemini_error = ""
     
-    try:
-        gemini_raw, gemini_structured = extract_with_gemini(image_path)
-        print(f"✓ Gemini extraction complete ({len(gemini_raw)} chars)")
-        print(f"  Extracted fields: {list(gemini_structured.keys())}")
-        gemini_available = True
-    except Exception as e:
-        print(f"⚠️  Gemini unavailable: {e}")
-        print(f"   Make sure GEMINI_API_KEY is set in environment")
-        gemini_error = str(e)
+    if not gemini_api_key:
+        print("⚠️  Gemini API Key not found in environment")
+        print("   Set GEMINI_API_KEY in .env file to enable Gemini Vision OCR")
+        gemini_error = "GEMINI_API_KEY not found"
+    else:
+        try:
+            gemini_raw, gemini_structured = extract_with_gemini(image_path)
+            print(f"✓ Gemini extraction complete ({len(gemini_raw)} chars)")
+            print(f"  Extracted fields: {list(gemini_structured.keys())}")
+            gemini_available = True
+        except Exception as e:
+            print(f"⚠️  Gemini unavailable: {e}")
+            print(f"   Make sure GEMINI_API_KEY is valid and has Vision API access")
+            gemini_error = str(e)
     
     print()
     
@@ -234,7 +252,7 @@ def run_benchmark(image_path: str):
     
     # Save report
     import json
-    report_path = project_root / "PHASE_2.8_OCR_BENCHMARK_REPORT.md"
+    report_path = PROJECT_ROOT / "PHASE_2.8_OCR_BENCHMARK_REPORT.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
         f.write("\n\n")

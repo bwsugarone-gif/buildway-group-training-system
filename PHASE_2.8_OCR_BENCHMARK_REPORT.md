@@ -34,4 +34,4 @@ address              ✗            0.00
 ```
 
 ### Gemini: UNAVAILABLE
-Error: GEMINI_API_KEY not found in environment
+Error: cannot import name 'exceptions' from 'cryptography.hazmat.bindings._rust' (unknown location)
